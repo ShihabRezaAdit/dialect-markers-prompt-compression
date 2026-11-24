@@ -90,6 +90,65 @@ def render_one(dialect, text: str, k: int) -> dict:
     return {"ok": False, "error": last_err, "attempts": 2}
 
 
+def sentence_spans(text: str) -> list[tuple[int, int]]:
+    """Character spans of the sentences of `text` (NLTK Punkt, English model, from NLTK_DATA).
+    Spans exclude the whitespace between sentences, which render_passage copies unchanged."""
+    import nltk
+
+    return list(nltk.data.load("tokenizers/punkt/english.pickle").span_tokenize(text))
+
+
+def join_sentences(text: str, spans: list[tuple[int, int]], rendered: list[str]) -> str:
+    """Rebuild a passage from rendered sentences, keeping the SAE text between and around the
+    sentences (spacing, line breaks) exactly as it is, in the original order."""
+    if len(spans) != len(rendered):
+        raise ValueError("one rendering per sentence span is required")
+    out, prev = [], 0
+    for (s, e), r in zip(spans, rendered):
+        if s < prev or e < s:
+            raise ValueError("sentence spans must be ordered and non-overlapping")
+        out.append(text[prev:s])
+        out.append(r)
+        prev = e
+    out.append(text[prev:])
+    return "".join(out)
+
+
+def render_passage(dialect, text: str, k: int, spans_fn=None) -> dict:
+    """Render a passage whole; if that fails after its retry, render it sentence by sentence
+    (decisions log: sentence fallback).
+
+    Fallback: set_seed(86 + k) once, then each Punkt sentence is transformed in order and the
+    results are joined with the SAE text between sentences kept exactly (join_sentences). Rule
+    spans are shifted to passage offsets. The whole fallback is retried once; if it still
+    fails the passage is recorded as failed. `method` is "whole", "sentence_fallback" or
+    "failed"; a fallback record keeps the whole-text error in `whole_error`.
+    """
+    r = render_one(dialect, text, k)
+    if r["ok"]:
+        return {**r, "method": "whole"}
+    spans = (spans_fn or sentence_spans)(text)
+    last_err = None
+    for attempt in (1, 2):
+        try:
+            dialect.set_seed(SEED + k)
+            t0 = time.perf_counter()
+            outs, rules, counter = [], [], {}
+            for s, e in spans:
+                outs.append(dialect.transform(text[s:e]))
+                for x in rule_log(dialect.executed_rules):
+                    rules.append({**x, "start": x["start"] + s, "end_incl": x["end_incl"] + s})
+                for a, b in dict(dialect.modification_counter).items():
+                    counter[str(a)] = counter.get(str(a), 0) + int(b)
+            return {"ok": True, "text": join_sentences(text, spans, outs), "rules": rules, "counter": counter,
+                    "seconds": time.perf_counter() - t0, "attempts": attempt, "method": "sentence_fallback",
+                    "n_sentences": len(spans), "whole_error": r["error"]}
+        except Exception as e:  # noqa: BLE001
+            last_err = f"{type(e).__name__}: {e}"
+    return {"ok": False, "error": last_err, "whole_error": r["error"], "attempts": 2, "method": "failed",
+            "n_sentences": len(spans)}
+
+
 def build_jobs(items: dict, cfg: dict) -> list[dict]:
     """One job per (text, dialect). In the smoke run (items["smoke"] is true) the smoke
     seed offsets are used, so smoke texts never share seeds with pilot texts."""
@@ -108,7 +167,9 @@ def build_jobs(items: dict, cfg: dict) -> list[dict]:
 
 
 def run_shard(jobs: list[dict], task: int, ntasks: int, morphosyntax: bool = True) -> list[dict]:
-    """Contiguous block of jobs for this task; one dialect object per class per worker."""
+    """Contiguous block of jobs for this task; one dialect object per class per worker.
+    Questions are rendered whole; passages (and stories) use render_passage, which falls back
+    to sentence-by-sentence rendering when the whole text fails."""
     n = len(jobs)
     lo, hi = task * n // ntasks, (task + 1) * n // ntasks
     objs: dict[str, object] = {}
@@ -116,6 +177,11 @@ def run_shard(jobs: list[dict], task: int, ntasks: int, morphosyntax: bool = Tru
     for j in jobs[lo:hi]:
         if j["dialect_class"] not in objs:
             objs[j["dialect_class"]] = make_dialect(j["dialect_class"], morphosyntax)
-        res = render_one(objs[j["dialect_class"]], j["text"], j["k"])
+        d = objs[j["dialect_class"]]
+        if j["kind"] == "question":
+            res = {**render_one(d, j["text"], j["k"])}
+            res["method"] = "whole" if res["ok"] else "failed"
+        else:
+            res = render_passage(d, j["text"], j["k"])
         out.append({k: j[k] for k in ("job_id", "kind", "pos", "k", "dialect")} | res)
     return out

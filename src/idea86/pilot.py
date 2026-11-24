@@ -30,11 +30,14 @@ LEARNED_S1 = ("L1", "L2", "SC")
 # ---------------------------------------------------------------- paths and loading
 
 class Run:
-    def __init__(self, cfg_path: str = "configs/p0.yaml", smoke: bool = False, cfg=None):
+    def __init__(self, cfg_path: str = "configs/p0.yaml", smoke: bool = False, cfg=None,
+                 exclude_fallback: bool = False):
         self.cfg = cfg if cfg is not None else load(cfg_path)
         self.cfg_hash = self.cfg.hash
         self.smoke = smoke
         self.root = self.cfg.run_dir(smoke)
+        # Sensitivity analysis: treat passages rendered by the sentence fallback as missing.
+        self.exclude_fallback = exclude_fallback
 
     def p(self, *parts) -> Path:
         return self.root.joinpath(*parts)
@@ -43,7 +46,10 @@ class Run:
         return read_json(self.p("items.json"))
 
     def rendered(self) -> dict:
-        return read_json(self.p("render", "rendered.json"))
+        r = read_json(self.p("render", "rendered.json"))
+        if self.exclude_fallback:
+            r = {k: ({**v, "ok": False} if v.get("method") == "sentence_fallback" else v) for k, v in r.items()}
+        return r
 
 
 def passage_text(items, rendered, ppos, g):
@@ -145,7 +151,28 @@ def step_render_collect(run: Run) -> None:
         raise SystemExit(f"{len(missing)} render jobs missing, e.g. {missing[:3]}")
     write_json(run.p("render", "rendered.json"), rendered)
     write_json(run.p("render", "failures.json"), fails)
+    summ = rendering_summary(rendered)
+    write_json(run.p("render", "summary.json"), summ)
     print(f"rendered {len(rendered)}; failed {len(fails)}")
+    for key, v in summ.items():
+        print(f"  {key}: {v['n']} texts, whole {v['whole']}, sentence fallback {v['sentence_fallback']}, "
+              f"failed {v['failed']} (failure rate {v['failure_rate']:.3f}, fallback share {v['fallback_share']:.3f})")
+
+
+def rendering_summary(rendered: dict) -> dict:
+    """Per text kind and dialect: how many texts were rendered whole, by the sentence fallback,
+    or failed (decisions log: sentence fallback; reported in the pilot report)."""
+    out: dict = {}
+    for r in rendered.values():
+        key = f"{r['kind']}_{r['dialect']}"
+        v = out.setdefault(key, {"n": 0, "whole": 0, "sentence_fallback": 0, "failed": 0})
+        v["n"] += 1
+        m = r.get("method") or ("whole" if r.get("ok") else "failed")
+        v[m if m in v else ("whole" if r.get("ok") else "failed")] += 1
+    for v in out.values():
+        v["failure_rate"] = v["failed"] / v["n"] if v["n"] else 0.0
+        v["fallback_share"] = v["sentence_fallback"] / v["n"] if v["n"] else 0.0
+    return dict(sorted(out.items()))
 
 
 # ---------------------------------------------------------------- step: audit export
@@ -403,6 +430,7 @@ def measure(run: Run) -> dict:
         pres[d] = flags
     res["answer_preserved_share"] = {d: float(np.mean(list(pres[d].values()))) for d in DIALECTS}
     res["primary_set"] = sorted(q for q in pres["A"] if pres["A"][q] and pres["C"][q])
+    res["rendering"] = rendering_summary(read_json(run.p("render", "rendered.json")))
     return res
 
 
@@ -642,7 +670,7 @@ def projection(run: Run, res: dict, sig: dict, acc: dict) -> dict:
     return out
 
 
-def write_report(run: Run, res, sig, gts, acc, proj) -> None:
+def write_report(run: Run, res, sig, gts, acc, proj, nf=None) -> None:
     L = ["# P0 pilot report", "",
          f"Config SHA-256: `{run.cfg_hash}`. Preliminary results; not confirmatory.", "",
          f"**Recommended outcome: {sig['recommendation']}** (S1 met: {sig['S1_met']}; S2 met: {sig['S2_met']}). "
@@ -655,6 +683,27 @@ def write_report(run: Run, res, sig, gts, acc, proj) -> None:
     L += ["", "## S2 answer survival (97.5% intervals)", "", "| Dialect | Delta_a | Interval | Discordance | n | Met |", "|---|---|---|---|---|---|"]
     for k, v in sig["S2"].items():
         L.append(f"| {k} | {v['estimate']:.4f} | [{v['ci'][0]:.4f}, {v['ci'][1]:.4f}] | {v['discordance']:.3f} | {v['n_questions']} | {v['met']} |")
+    L += ["", "## Rendering: failures and sentence fallback", "",
+          "| Texts | n | Whole | Sentence fallback | Failed | Failure rate | Fallback share |",
+          "|---|---|---|---|---|---|---|"]
+    for k, v in rendering_summary(read_json(run.p("render", "rendered.json"))).items():
+        L.append(f"| {k} | {v['n']} | {v['whole']} | {v['sentence_fallback']} | {v['failed']} | "
+                 f"{v['failure_rate']:.3f} | {v['fallback_share']:.3f} |")
+    if nf is not None:
+        L += ["", "## Sensitivity analysis: without sentence-fallback passages", "",
+              "Passages rendered by the sentence fallback are treated as missing; everything else is as above.", "",
+              f"Recommended outcome under this analysis: {nf['sig']['recommendation']} "
+              f"(S1 met: {nf['sig']['S1_met']}; S2 met: {nf['sig']['S2_met']}).", "",
+              "| S1 cell | Delta_s | 99.17% interval | n | Met |", "|---|---|---|---|---|"]
+        for k, v in nf["sig"]["S1"].items():
+            L.append(f"| {k} | {v['estimate']:.4f} | [{v['ci'][0]:.4f}, {v['ci'][1]:.4f}] | {v['n_paragraphs']} | {v['met']} |")
+        L += ["", "| S2 dialect | Delta_a | 97.5% interval | n | Met |", "|---|---|---|---|---|"]
+        for k, v in nf["sig"]["S2"].items():
+            L.append(f"| {k} | {v['estimate']:.4f} | [{v['ci'][0]:.4f}, {v['ci'][1]:.4f}] | {v['n_questions']} | {v['met']} |")
+        L += ["", f"Answer-preserved share: {json.dumps(nf['res']['answer_preserved_share'])}", ""]
+        for k, v in nf["acc"].items():
+            if isinstance(v, dict):
+                L.append(f"- {k}: {v['estimate']:.4f} [{v['ci95'][0]:.4f}, {v['ci95'][1]:.4f}] (n {v['n']})")
     L += ["", "## Sensitivity analysis: partial words counted as kept (not used by S1 or G4)", "",
           "| Cell | Delta_s | 95% interval | n |", "|---|---|---|---|"]
     for k, v in res["retention_partial_kept"].items():
@@ -693,5 +742,13 @@ def step_analyze(run: Run) -> None:
     write_json(run.p("results", "gates.json"), gts)
     write_json(run.p("results", "accuracy.json"), acc)
     write_json(run.p("results", "projection.json"), proj)
-    write_report(run, res, sig, gts, acc, proj)
-    print(f"recommendation: {sig['recommendation']}; report -> {run.p('report', 'P0_report.md')}")
+    # Sensitivity analysis: the same measures without passages rendered by the sentence fallback
+    run_nf = Run(cfg=run.cfg, smoke=run.smoke, exclude_fallback=True)
+    res_nf = measure(run_nf)
+    nf = {"res": res_nf, "sig": signals(run_nf, res_nf), "acc": accuracy(run_nf, res_nf)}
+    write_json(run.p("results", "sensitivity_no_fallback.json"),
+               {"signals": nf["sig"], "accuracy": nf["acc"], "answer_preserved_share": res_nf["answer_preserved_share"],
+                "retention_excluded": {k: v["excluded"] for k, v in res_nf["retention"].items()}})
+    write_report(run, res, sig, gts, acc, proj, nf)
+    print(f"recommendation: {sig['recommendation']}; without fallback passages: {nf['sig']['recommendation']}; "
+          f"report -> {run.p('report', 'P0_report.md')}")

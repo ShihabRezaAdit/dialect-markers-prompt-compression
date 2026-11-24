@@ -30,10 +30,13 @@ def make_cfg(tmp: Path):
 def fake_render(r):
     P.step_render_jobs(r)
     jobs = C.read_jsonl(r.p("render", "jobs.jsonl"))
+    # every 10th passage counts as rendered by the sentence fallback
     rows = [{**{k: j[k] for k in ("job_id", "kind", "pos", "k", "dialect")}, "ok": True,
              "text": fake_dialect(j["text"], j["dialect"]),
              "rules": [{"start": 9, "end_incl": 10, "value": "", "type": "zero_copula"}],
-             "counter": {}, "seconds": 0.5} for j in jobs]
+             "counter": {}, "seconds": 0.5,
+             "method": "sentence_fallback" if j["kind"] == "passage" and j["pos"] % 10 == 0 else "whole"}
+            for j in jobs]
     C.write_jsonl(r.p("render", "shards", "shard_000.jsonl"), rows)
     P.step_render_collect(r)
 
@@ -100,6 +103,11 @@ def test_pilot_dry_run():
         assert {"G1", "G2", "G3", "G4", "G5"} <= set(gts) and gts["G4"]["units"] == 600
         rep = run.p("report", "P0_report.md").read_text()
         assert "Recommended outcome" in rep and "partial words counted as kept" in rep
+        assert "Rendering: failures and sentence fallback" in rep and "without sentence-fallback passages" in rep
+        summ = json.loads(run.p("render", "summary.json").read_text())
+        assert summ["passage_A"]["sentence_fallback"] == 30 and summ["passage_A"]["fallback_share"] == 0.1
+        nf = json.loads(run.p("results", "sensitivity_no_fallback.json").read_text())
+        assert all(v["n_paragraphs"] == 270 for v in nf["signals"]["S1"].values())
         meas = json.loads(run.p("results", "measure.json").read_text())
         assert set(meas["retention_partial_kept"]) == {f"{c}_{d_}" for c in ("L1", "L2", "SC", "R") for d_ in ("A", "C")}
 
