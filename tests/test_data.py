@@ -48,5 +48,8 @@ def test_real_aae_sample():
 def test_conllu_and_fallback():
     txt = "# sent_id = 1\n# text = yall be trippin fr\n1\tyall\t_\n\n# sent_id = 2\n# text = ok then\n1\tok\n"
     assert D.read_conllu_texts(txt) == ["yall be trippin fr", "ok then"]
+    # UD-TwitterAAE v1 layout: no comment lines; FORM tokens joined by spaces, one text per block
+    bare = "1\tyea\t_\n2\tuu\t_\n3\tdid\t_\n\n1-2\tgonna\t_\n1\tgon\t_\n2\tna\t_\n2.1\tx\t_\n3\tgo\t_\n"
+    assert D.read_conllu_texts(bare) == ["yea uu did", "gon na go"]
     p, s = D.ud_fallback_sample([str(i) for i in range(250)])
     assert len(p) == 50 and len(s) == 200 and not set(p) & set(s)

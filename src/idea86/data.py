@@ -131,12 +131,36 @@ def real_aae_sample(n_rows: int, first: int, last: int) -> list[int]:
 # ---------------------------------------------------------------- UD-TwitterAAE fallback
 
 def read_conllu_texts(text: str) -> list[str]:
-    """Tweet texts from the `# text = ...` comment lines of a CoNLL-U file."""
-    out = []
+    """Tweet texts from a CoNLL-U file, one per sentence block (blocks end at a blank line).
+
+    A block's `# text = ...` comment is used when present. The UD-TwitterAAE v1 files have no
+    comment lines and no SpaceAfter marks, so otherwise the text is the FORM column of the
+    block's word lines joined by single spaces (multiword-token ranges and empty nodes skipped).
+    """
+    out: list[str] = []
+    comment: str | None = None
+    forms: list[str] = []
+
+    def flush():
+        nonlocal comment, forms
+        if comment is not None or forms:
+            out.append(comment if comment is not None else " ".join(forms))
+        comment, forms = None, []
+
     for line in io.StringIO(text):
-        m = re.match(r"#\s*text\s*=\s*(.*)$", line.rstrip("\n"))
-        if m:
-            out.append(m.group(1))
+        line = line.rstrip("\r\n")
+        if not line.strip():
+            flush()
+            continue
+        if line.startswith("#"):
+            m = re.match(r"#\s*text\s*=\s*(.*)$", line)
+            if m:
+                comment = m.group(1)
+            continue
+        cols = line.split("\t")
+        if len(cols) >= 2 and cols[0].isdigit():
+            forms.append(cols[1])
+    flush()
     return out
 
 
@@ -153,7 +177,10 @@ def _fetch(url: str, dest: Path) -> int:
 
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_suffix(dest.suffix + ".part")
-    with urllib.request.urlopen(url, timeout=120) as r, open(tmp, "wb") as f:
+    # The REAL-AAE host answers Python's default user agent with 403 Forbidden (seen on ARCC2),
+    # while a browser-style user agent gets the file; the content is checked by the caller.
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) idea86-download"})
+    with urllib.request.urlopen(req, timeout=120) as r, open(tmp, "wb") as f:
         while True:
             b = r.read(1 << 20)
             if not b:
