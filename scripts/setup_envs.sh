@@ -8,6 +8,16 @@ cd "$HERE"
 source cluster.env
 mkdir -p envs/lock
 
+# Install en_core_web_sm in the version spaCy itself picks as compatible (as `spacy download`
+# does), from the plain wheel URL: current pip rejects the "#egg=name==version" URL that
+# `spacy download` passes for older spaCy versions.
+spacy_model() {
+  local v
+  v=$(python -c "from spacy.cli.download import get_compatibility, get_version; print(get_version('en_core_web_sm', get_compatibility()))")
+  echo "spaCy model en_core_web_sm $v"
+  pip install "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-$v/en_core_web_sm-$v-py3-none-any.whl"
+}
+
 make_env() {  # make_env <short name: render|compress|sc|gen|stats>
   local short="$1" name="env-$1"
   echo "=== $name ==="
@@ -18,7 +28,7 @@ make_env() {  # make_env <short name: render|compress|sc|gen|stats>
     pip install --upgrade pip wheel setuptools
     pip install -r "envs/$name.txt"
     pip install -e "$HERE"
-    if [ "$short" = render ] || [ "$short" = sc ]; then python -m spacy download en_core_web_sm; fi
+    if [ "$short" = render ] || [ "$short" = sc ]; then spacy_model; fi
     pip freeze --exclude-editable > "envs/lock/$name.lock.txt"
     deactivate )
 }
