@@ -33,5 +33,6 @@ make_env() {  # make_env <short name: render|compress|sc|gen|stats>
     deactivate )
 }
 
-for e in ${1:-stats gen compress sc render}; do make_env "$e"; done
+envs=("$@"); [ ${#envs[@]} -gt 0 ] || envs=(stats gen compress sc render)
+for e in "${envs[@]}"; do make_env "$e"; done
 echo "Environments ready under $ENV_ROOT. Locks written to envs/lock/ (commit them)."
