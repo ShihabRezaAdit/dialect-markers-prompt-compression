@@ -5,4 +5,8 @@ numpy<2
 # stanza 1.8.2 loads its models with torch.load defaults from before PyTorch 2.6 (weights_only=False);
 # torch>=2.6 refuses them (UnpicklingError on numpy.core.multiarray._reconstruct, seen in the ARCC2 warm-up).
 torch<2.6
+# Stanza's coreference model (used by Multi-VALUE) imports peft and transformers; transformers 5
+# needs torch>=2.6, so both stay on releases that support torch 2.5.
+transformers>=4.40,<4.50
+peft<0.15
 openpyxl
