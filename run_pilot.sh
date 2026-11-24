@@ -30,6 +30,7 @@ for v in PARTITION GPU_GRES ENV_ROOT HF_HOME NLP_DATA; do
   [ -n "${!v:-}" ] || { echo "cluster.env: $v is required"; exit 1; }
 done
 export HF_HOME HF_HUB_OFFLINE NLTK_DATA="$NLP_DATA/nltk" STANZA_RESOURCES_DIR="$NLP_DATA/stanza"
+export PYTHONUNBUFFERED=1   # progress lines reach the logs as they happen
 mkdir -p "$NLTK_DATA" "$STANZA_RESOURCES_DIR" logs
 CFG="configs/p0.yaml"
 
