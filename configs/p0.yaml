@@ -1,0 +1,111 @@
+# P0 pilot configuration (Idea 86). Every value below is fixed by the internal plan
+# (Section 29, Configuration) or the pilot plan; neither may change after the
+# pre-commitment except through an entry in the decisions log.
+experiment: P0
+seed: 86
+
+paths:
+  data_dir: data            # created on the cluster; not committed
+  runs_dir: runs            # created on the cluster; not committed
+  prereg_dir: prereg        # the pre-commitment file is committed here
+
+# SHA-256 of the binding plan sources and the annotation guide, recorded in the
+# pre-commitment (the plans are LaTeX files outside this repository).
+plan_sources:
+  internal_plan_tex: 96c9c18b02f509a49b4832481dcfc32f2a65215c0ba2a4d648ea8395d55f0000
+  pilot_plan_tex: 1a6fbdb535f42d9da766d4a8f368d510037bdb12889b7aed0f02043bc8fd505d
+  annotation_guide_pdf: db6115222a1976e8b3fb78726e1a2c1f016bb79dded43c5ab8d2f97626d486a0   # P0_annotation/Idea86_Annotation_Guide.pdf
+
+data:
+  squad:
+    repo: rajpurkar/squad
+    config: plain_text
+    revision: 7b6d24c440a36b6815f21b70d25016731768db1f
+    split: train
+    expected_questions: 87599
+  real_aae:
+    url: https://anonymous.4open.science/api/repo/dialect/file/data/real_aae/real_aae.csv
+    expected_rows: 17479
+    text_columns: [aae_text, sae_text]
+  ud_twitteraae:              # fallback only (internal plan Section 7)
+    url: https://slanglab.cs.umass.edu/TwitterAAE/TwitterAAE-UD-v1.zip
+    files: [aa250_gold.conllu, wh250_gold.conllu]
+    expected_tweets_per_file: 250
+
+sample:
+  pilot_paragraphs: 300
+  questions_per_paragraph: 2
+  real_aae_pilot_rows: [1, 200]       # 1-based positions after the seed-86 shuffle
+  real_aae_study_rows: [201, 2200]    # reserved; never opened in P0
+  ud_fallback_pilot_per_file: 50
+  audit_pairs_per_dialect: 50
+  smoke_paragraphs: 10                # shuffle positions 300 to 309; not pilot items
+  warmup_pairs: 5                     # annotation guide D4; labels discarded
+
+render:
+  package: value-nlp==0.3
+  dialects:
+    A: AfricanAmericanVernacular
+    C: ColloquialSingaporeDialect
+  fallback_dialect: IndianDialect     # G5 only
+  morphosyntax: true
+  array_tasks: 64
+  cpus_per_task: 4
+  k_offsets:                          # set_seed(86 + k)
+    pilot_passage: 300000
+    pilot_question: 400000
+    smoke_passage: 500000
+    smoke_question: 600000
+    tweet_row: 700000                 # k_text for the random control on tweets
+
+compress:
+  rho: 0.5
+  models:
+    llama2: {repo: NousResearch/Llama-2-7b-hf, revision: 8efe6c9b93655b934e27bd9981e3ec13e55aee9d}
+    xlmr: {repo: microsoft/llmlingua-2-xlm-roberta-large-meetingbank, revision: ebaba9b0e874dadd3003ffcff828e4397e568089}
+    gpt2: {repo: openai-community/gpt2, revision: 607a30d783dfa663caf39e06633721c8d4cfcd7e}
+  sc_reduce_level: phrase
+  sc_max_gpt2_tokens: 1024
+
+generate:
+  models:                             # P0 uses M1 and M2 only
+    M1: {repo: meta-llama/Llama-3.1-8B-Instruct, revision: 0e9e39f249a16976918f6564b8830bc894c89659}
+    M2: {repo: Qwen/Qwen2.5-14B-Instruct, revision: cf98f3b3bbb457ad9e2bb7baf9a0125b6b88caa8}
+  dtype: bfloat16
+  max_model_len: 4096
+  tensor_parallel_size: 1
+  temperature: 0.0
+  max_tokens: 32
+  seed: 86
+
+stats:
+  bootstrap_resamples: 2000
+  bootstrap_seed: 86
+
+gates:
+  g1_render_pairs_per_dialect: 20
+  g1_compress_texts_per_compressor: 20
+  g1_generate_prompts_per_model: 200
+  g1_generate_min_same: 196
+  g2_band: [0.35, 0.65]
+  g2_max_diff: 0.05
+  g3_min_overlap: 0.90
+  g4_max_abs: 0.03
+  g5_min_content_yes: 43
+  g5_min_answer_preserved: 0.60
+
+signals:
+  s1_cells: 6                         # {L1, L2, SC} x {A, C}
+  s1_floor: 0.04
+  s1_alpha: 0.05
+  s2_cells: 2                         # {A, C}
+  s2_floor: 0.03
+  s2_alpha: 0.05
+
+decision_rule:
+  applies_when: G1 to G5 pass (a failed gate is fixed and re-checked first; one that still fails is reported to the advisor, who decides)
+  Go: S1 and S2 met; E1 to E6 in full; the paper leads with RQ1 and RQ2
+  Go, retention focus: S1 met, S2 not; E1 to E6 in full; the paper leads with RQ1 and RQ3
+  Go, realistic-pipeline focus: S2 met, S1 not; E1 to E6 in full; the paper leads with RQ2
+  No-go: neither met; stop and move to the backup idea, or an equivalence short paper if the advisor prefers
+  status: recommendation; the decision is taken with the advisor

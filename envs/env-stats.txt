@@ -1,0 +1,6 @@
+# Measurement, audit sheets, statistics and the report (internal plan Section 27).
+numpy
+scipy
+pandas
+statsmodels
+openpyxl

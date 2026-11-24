@@ -1,0 +1,25 @@
+# Created by the pipeline on the cluster (not committed; source and rendered texts are not redistributed)
+data/
+runs/
+logs/
+
+# Model weights and caches
+*.safetensors
+*.bin
+*.pt
+hf_cache/
+nlp_data/
+
+# Annotation sheets never go to GitHub
+*.xlsx
+
+# Logs
+*.log
+
+# Python
+__pycache__/
+*.egg-info/
+.venv/
+
+# Secrets
+.env

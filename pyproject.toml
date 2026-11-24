@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "idea86"
+version = "0.1.0"
+description = "Does prompt compression remove dialect markers? Pilot study P0"
+requires-python = ">=3.10"
+dependencies = ["pyyaml", "numpy"]
+
+[tool.setuptools.packages.find]
+where = ["src"]

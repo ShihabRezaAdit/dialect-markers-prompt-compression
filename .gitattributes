@@ -1,0 +1,3 @@
+# Keep Unix line endings so scripts run on the cluster
+* text=auto eol=lf
+*.xlsx binary

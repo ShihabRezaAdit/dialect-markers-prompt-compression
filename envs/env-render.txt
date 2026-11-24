@@ -1,0 +1,5 @@
+# Rendering (internal plan Section 27): Multi-VALUE value-nlp 0.3 with its spaCy and Stanza models.
+# value-nlp pins spacy==3.7.4, whose compiled extensions need numpy 1.x.
+value-nlp==0.3
+numpy<2
+openpyxl

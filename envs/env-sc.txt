@@ -1,0 +1,6 @@
+# Compression with Selective Context (internal plan Section 27). selective-context pins
+# spacy==3.2.0, whose compiled extensions need numpy 1.x.
+selective-context==0.1.4
+numpy<2
+huggingface_hub
+openpyxl

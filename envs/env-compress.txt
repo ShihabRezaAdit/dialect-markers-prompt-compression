@@ -1,0 +1,4 @@
+# Compression with L1, L2 and LL (internal plan Section 27).
+llmlingua==0.2.2
+huggingface_hub
+openpyxl
