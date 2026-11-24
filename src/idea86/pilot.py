@@ -31,13 +31,14 @@ LEARNED_S1 = ("L1", "L2", "SC")
 
 class Run:
     def __init__(self, cfg_path: str = "configs/p0.yaml", smoke: bool = False, cfg=None,
-                 exclude_fallback: bool = False):
+                 exclude_methods: tuple = ()):
         self.cfg = cfg if cfg is not None else load(cfg_path)
         self.cfg_hash = self.cfg.hash
         self.smoke = smoke
         self.root = self.cfg.run_dir(smoke)
-        # Sensitivity analysis: treat passages rendered by the sentence fallback as missing.
-        self.exclude_fallback = exclude_fallback
+        # Sensitivity analyses: treat texts rendered by these methods as missing
+        # (e.g. ("no_coref",) or ("sentence_fallback", "no_coref")).
+        self.exclude_methods = tuple(exclude_methods)
 
     def p(self, *parts) -> Path:
         return self.root.joinpath(*parts)
@@ -47,8 +48,8 @@ class Run:
 
     def rendered(self) -> dict:
         r = read_json(self.p("render", "rendered.json"))
-        if self.exclude_fallback:
-            r = {k: ({**v, "ok": False} if v.get("method") == "sentence_fallback" else v) for k, v in r.items()}
+        if self.exclude_methods:
+            r = {k: ({**v, "ok": False} if v.get("method") in self.exclude_methods else v) for k, v in r.items()}
         return r
 
 
@@ -156,22 +157,33 @@ def step_render_collect(run: Run) -> None:
     print(f"rendered {len(rendered)}; failed {len(fails)}")
     for key, v in summ.items():
         print(f"  {key}: {v['n']} texts, whole {v['whole']}, sentence fallback {v['sentence_fallback']}, "
-              f"failed {v['failed']} (failure rate {v['failure_rate']:.3f}, fallback share {v['fallback_share']:.3f})")
+              f"no-coref {v['no_coref']} ({v['no_coref_sentences']} sentences), failed {v['failed']} "
+              f"(failure rate {v['failure_rate']:.3f})")
+        if v["coref_dependent_features"]:
+            print(f"    features that read coreference (not applied in no-coref sentences): "
+                  f"{', '.join(v['coref_dependent_features'])}")
 
 
 def rendering_summary(rendered: dict) -> dict:
-    """Per text kind and dialect: how many texts were rendered whole, by the sentence fallback,
-    or failed (decisions log: sentence fallback; reported in the pilot report)."""
+    """Per text kind and dialect: texts rendered whole, by the sentence fallback, with at least
+    one no-coreference sentence, or failed; the number of no-coreference sentences; and the
+    Multi-VALUE features that read coreference and so could not apply in those sentences
+    (decisions log: sentence fallback; no-coreference last resort)."""
     out: dict = {}
     for r in rendered.values():
         key = f"{r['kind']}_{r['dialect']}"
-        v = out.setdefault(key, {"n": 0, "whole": 0, "sentence_fallback": 0, "failed": 0})
+        v = out.setdefault(key, {"n": 0, "whole": 0, "sentence_fallback": 0, "no_coref": 0, "failed": 0,
+                                 "no_coref_sentences": 0, "coref_dependent_features": []})
         v["n"] += 1
         m = r.get("method") or ("whole" if r.get("ok") else "failed")
-        v[m if m in v else ("whole" if r.get("ok") else "failed")] += 1
+        v[m if m in ("whole", "sentence_fallback", "no_coref", "failed") else ("whole" if r.get("ok") else "failed")] += 1
+        v["no_coref_sentences"] += len(r.get("no_coref_sentences") or [])
+        v["coref_dependent_features"] = sorted(set(v["coref_dependent_features"]) | set(r.get("coref_dependent_features") or []))
     for v in out.values():
-        v["failure_rate"] = v["failed"] / v["n"] if v["n"] else 0.0
-        v["fallback_share"] = v["sentence_fallback"] / v["n"] if v["n"] else 0.0
+        n = v["n"] or 1
+        v["failure_rate"] = v["failed"] / n
+        v["fallback_share"] = v["sentence_fallback"] / n
+        v["no_coref_share"] = v["no_coref"] / n
     return dict(sorted(out.items()))
 
 
@@ -683,25 +695,30 @@ def write_report(run: Run, res, sig, gts, acc, proj, nf=None) -> None:
     L += ["", "## S2 answer survival (97.5% intervals)", "", "| Dialect | Delta_a | Interval | Discordance | n | Met |", "|---|---|---|---|---|---|"]
     for k, v in sig["S2"].items():
         L.append(f"| {k} | {v['estimate']:.4f} | [{v['ci'][0]:.4f}, {v['ci'][1]:.4f}] | {v['discordance']:.3f} | {v['n_questions']} | {v['met']} |")
-    L += ["", "## Rendering: failures and sentence fallback", "",
-          "| Texts | n | Whole | Sentence fallback | Failed | Failure rate | Fallback share |",
-          "|---|---|---|---|---|---|---|"]
-    for k, v in rendering_summary(read_json(run.p("render", "rendered.json"))).items():
-        L.append(f"| {k} | {v['n']} | {v['whole']} | {v['sentence_fallback']} | {v['failed']} | "
-                 f"{v['failure_rate']:.3f} | {v['fallback_share']:.3f} |")
-    if nf is not None:
-        L += ["", "## Sensitivity analysis: without sentence-fallback passages", "",
-              "Passages rendered by the sentence fallback are treated as missing; everything else is as above.", "",
-              f"Recommended outcome under this analysis: {nf['sig']['recommendation']} "
-              f"(S1 met: {nf['sig']['S1_met']}; S2 met: {nf['sig']['S2_met']}).", "",
+    summ = rendering_summary(read_json(run.p("render", "rendered.json")))
+    L += ["", "## Rendering: whole, sentence fallback, no-coreference sentences, failures", "",
+          "| Texts | n | Whole | Sentence fallback | No-coref passages | No-coref sentences | Failed | Failure rate |",
+          "|---|---|---|---|---|---|---|---|"]
+    for k, v in summ.items():
+        L.append(f"| {k} | {v['n']} | {v['whole']} | {v['sentence_fallback']} | {v['no_coref']} | "
+                 f"{v['no_coref_sentences']} | {v['failed']} | {v['failure_rate']:.3f} |")
+    L.append("")
+    for k, v in summ.items():
+        if v["coref_dependent_features"]:
+            L.append(f"- {k}: Multi-VALUE features that read coreference, so they could not apply in the "
+                     f"no-coref sentences: {', '.join(v['coref_dependent_features'])}")
+    for title, sa in (nf or {}).items():
+        L += ["", f"## Sensitivity analysis: {title}", "",
+              f"Recommended outcome under this analysis: {sa['sig']['recommendation']} "
+              f"(S1 met: {sa['sig']['S1_met']}; S2 met: {sa['sig']['S2_met']}).", "",
               "| S1 cell | Delta_s | 99.17% interval | n | Met |", "|---|---|---|---|---|"]
-        for k, v in nf["sig"]["S1"].items():
+        for k, v in sa["sig"]["S1"].items():
             L.append(f"| {k} | {v['estimate']:.4f} | [{v['ci'][0]:.4f}, {v['ci'][1]:.4f}] | {v['n_paragraphs']} | {v['met']} |")
         L += ["", "| S2 dialect | Delta_a | 97.5% interval | n | Met |", "|---|---|---|---|---|"]
-        for k, v in nf["sig"]["S2"].items():
+        for k, v in sa["sig"]["S2"].items():
             L.append(f"| {k} | {v['estimate']:.4f} | [{v['ci'][0]:.4f}, {v['ci'][1]:.4f}] | {v['n_questions']} | {v['met']} |")
-        L += ["", f"Answer-preserved share: {json.dumps(nf['res']['answer_preserved_share'])}", ""]
-        for k, v in nf["acc"].items():
+        L += ["", f"Answer-preserved share: {json.dumps(sa['res']['answer_preserved_share'])}", ""]
+        for k, v in sa["acc"].items():
             if isinstance(v, dict):
                 L.append(f"- {k}: {v['estimate']:.4f} [{v['ci95'][0]:.4f}, {v['ci95'][1]:.4f}] (n {v['n']})")
     L += ["", "## Sensitivity analysis: partial words counted as kept (not used by S1 or G4)", "",
@@ -742,13 +759,20 @@ def step_analyze(run: Run) -> None:
     write_json(run.p("results", "gates.json"), gts)
     write_json(run.p("results", "accuracy.json"), acc)
     write_json(run.p("results", "projection.json"), proj)
-    # Sensitivity analysis: the same measures without passages rendered by the sentence fallback
-    run_nf = Run(cfg=run.cfg, smoke=run.smoke, exclude_fallback=True)
-    res_nf = measure(run_nf)
-    nf = {"res": res_nf, "sig": signals(run_nf, res_nf), "acc": accuracy(run_nf, res_nf)}
-    write_json(run.p("results", "sensitivity_no_fallback.json"),
-               {"signals": nf["sig"], "accuracy": nf["acc"], "answer_preserved_share": res_nf["answer_preserved_share"],
-                "retention_excluded": {k: v["excluded"] for k, v in res_nf["retention"].items()}})
+    # Sensitivity analyses: the same measures without no-coref passages, and without any
+    # passage rendered by a fallback (sentence fallback or no-coref)
+    nf = {}
+    for title, fname, methods in (("without no-coreference passages", "sensitivity_no_coref.json", ("no_coref",)),
+                                  ("without sentence-fallback and no-coreference passages",
+                                   "sensitivity_no_fallback.json", ("sentence_fallback", "no_coref"))):
+        run_x = Run(cfg=run.cfg, smoke=run.smoke, exclude_methods=methods)
+        res_x = measure(run_x)
+        nf[title] = {"res": res_x, "sig": signals(run_x, res_x), "acc": accuracy(run_x, res_x)}
+        write_json(run.p("results", fname),
+                   {"excluded_methods": list(methods), "signals": nf[title]["sig"], "accuracy": nf[title]["acc"],
+                    "answer_preserved_share": res_x["answer_preserved_share"],
+                    "retention_excluded": {k: v["excluded"] for k, v in res_x["retention"].items()}})
     write_report(run, res, sig, gts, acc, proj, nf)
-    print(f"recommendation: {sig['recommendation']}; without fallback passages: {nf['sig']['recommendation']}; "
-          f"report -> {run.p('report', 'P0_report.md')}")
+    print(f"recommendation: {sig['recommendation']}; "
+          + "; ".join(f"{t}: {v['sig']['recommendation']}" for t, v in nf.items())
+          + f"; report -> {run.p('report', 'P0_report.md')}")

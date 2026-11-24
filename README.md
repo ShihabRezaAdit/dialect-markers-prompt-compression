@@ -123,4 +123,16 @@ internal plan's decisions log:
     re-compressed per compressor (20 Arm B passages for LL); 200 prompts are re-generated per model.
 13. **Bootstrap.** Percentile intervals; two-sided p = 2 min(P*[theta <= 0], P*[theta >= 0]).
 14. **Environment pins.** value-nlp and selective-context pin old spaCy releases that need
-    numpy 1.x, so `envs/env-render.txt` and `envs/env-sc.txt` add `numpy<2`.
+    numpy 1.x, so `envs/env-render.txt` and `envs/env-sc.txt` add `numpy<2`. Stanza 1.8.2 (pinned
+    by value-nlp) cannot load its models under torch 2.6 or later, so `envs/env-render.txt` also
+    pins `torch<2.6`, `transformers>=4.40,<4.50` and `peft<0.15` (decisions log).
+
+Decided during pilot preparation (smoke run; decisions log, internal plan):
+
+15. **Sentence fallback.** A passage that Multi-VALUE cannot render whole is rendered sentence by
+    sentence (NLTK Punkt), with the SAE text between sentences kept exactly (`render_passage`).
+16. **No-coreference last resort.** A sentence that still fails the spaCy/Stanza alignment check
+    in Multi-VALUE's coreference step is rendered with coreference off for that sentence only.
+    Every text is tagged `whole`, `sentence_fallback`, `no_coref` or `failed`; `render-collect`
+    and the report give the counts per dialect and the features that read coreference; the
+    report adds sensitivity analyses without no-coref passages and without any fallback passages.

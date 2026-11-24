@@ -12,8 +12,8 @@ paths:
 # SHA-256 of the binding plan sources and the annotation guide, recorded in the
 # pre-commitment (the plans are LaTeX files outside this repository).
 plan_sources:
-  internal_plan_tex: 698c0476656659d37f4658a0833f8e506836581f51f5d7013f8ddc9498a95a2f
-  pilot_plan_tex: 5993111e6082f89c9b7da55492b128c5fe2660d94106541f6967fc836532fe3b
+  internal_plan_tex: 51bc2847cbf41f7e7af54aa023cda1555109898d7dd0b1b4605343f57a41157d
+  pilot_plan_tex: 971bb88137b67795891e9175bbf345f4948f6677bb8332a2b61b26f0bfd10d37
   annotation_guide_pdf: db6115222a1976e8b3fb78726e1a2c1f016bb79dded43c5ab8d2f97626d486a0   # P0_annotation/Idea86_Annotation_Guide.pdf
 
 data:

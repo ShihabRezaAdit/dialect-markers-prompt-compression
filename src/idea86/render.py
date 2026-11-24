@@ -114,15 +114,64 @@ def join_sentences(text: str, spans: list[tuple[int, int]], rendered: list[str])
     return "".join(out)
 
 
+COREF_ERROR = "Spacy and Stanza"   # value-nlp 0.3 alignment checks in create_coref_cluster
+
+
+def transform_no_coref(dialect, text: str) -> str:
+    """Transform one sentence with Multi-VALUE's coreference step turned off: the dialect's
+    create_coref_cluster returns no clusters for this call only, so rules that read coreference
+    clusters do not apply to this sentence (decisions log: no-coreference last resort)."""
+    dialect.create_coref_cluster = lambda string: []
+    try:
+        return dialect.transform(text)
+    finally:
+        del dialect.create_coref_cluster   # the class method applies again
+
+
+def coref_dependent_features(dialect) -> list[str]:
+    """Feature methods of this dialect that read Multi-VALUE's coreference clusters, directly or
+    through the methods they call (found from the source). These are the rules that cannot
+    apply in a no-coreference sentence; the pilot report lists them per dialect."""
+    import inspect
+    import re as _re
+
+    cls = type(dialect)
+    src: dict[str, str] = {}
+    for klass in cls.__mro__:
+        for name, fn in vars(klass).items():
+            if callable(fn) and name not in src:
+                try:
+                    src[name] = inspect.getsource(fn)
+                except (OSError, TypeError):
+                    src[name] = ""
+    memo: dict[str, bool] = {}
+
+    def uses(name: str, seen: frozenset = frozenset()) -> bool:
+        if name in memo:
+            return memo[name]
+        body = src.get(name, "")
+        hit = "coref_clusters" in body or any(
+            c not in seen and c != name and uses(c, seen | {name})
+            for c in set(_re.findall(r"self\.(\w+)\(", body)) if c in src)
+        memo[name] = hit
+        return hit
+
+    return sorted(f for f in getattr(dialect, "morphosyntax_transforms", {}) if uses(f))
+
+
 def render_passage(dialect, text: str, k: int, spans_fn=None) -> dict:
-    """Render a passage whole; if that fails after its retry, render it sentence by sentence
-    (decisions log: sentence fallback).
+    """Render a passage whole; if that fails after its retry, render it sentence by sentence;
+    a sentence that fails the coreference alignment check is rendered without coreference
+    (decisions log: sentence fallback; no-coreference last resort).
 
     Fallback: set_seed(86 + k) once, then each Punkt sentence is transformed in order and the
     results are joined with the SAE text between sentences kept exactly (join_sentences). Rule
-    spans are shifted to passage offsets. The whole fallback is retried once; if it still
-    fails the passage is recorded as failed. `method` is "whole", "sentence_fallback" or
-    "failed"; a fallback record keeps the whole-text error in `whole_error`.
+    spans are shifted to passage offsets. A sentence whose transform raises the spaCy/Stanza
+    alignment error is transformed again with coreference off (transform_no_coref). The whole
+    fallback is retried once; if it still fails the passage is recorded as failed.
+    `method` is "whole", "sentence_fallback", "no_coref" (at least one no-coreference
+    sentence) or "failed"; fallback records keep the whole-text error in `whole_error` and the
+    indices of no-coreference sentences in `no_coref_sentences`.
     """
     r = render_one(dialect, text, k)
     if r["ok"]:
@@ -133,16 +182,26 @@ def render_passage(dialect, text: str, k: int, spans_fn=None) -> dict:
         try:
             dialect.set_seed(SEED + k)
             t0 = time.perf_counter()
-            outs, rules, counter = [], [], {}
-            for s, e in spans:
-                outs.append(dialect.transform(text[s:e]))
+            outs, rules, counter, no_coref = [], [], {}, []
+            for i, (s, e) in enumerate(spans):
+                try:
+                    outs.append(dialect.transform(text[s:e]))
+                except Exception as ex:  # noqa: BLE001
+                    if COREF_ERROR not in str(ex):
+                        raise
+                    outs.append(transform_no_coref(dialect, text[s:e]))
+                    no_coref.append(i)
                 for x in rule_log(dialect.executed_rules):
                     rules.append({**x, "start": x["start"] + s, "end_incl": x["end_incl"] + s})
                 for a, b in dict(dialect.modification_counter).items():
                     counter[str(a)] = counter.get(str(a), 0) + int(b)
-            return {"ok": True, "text": join_sentences(text, spans, outs), "rules": rules, "counter": counter,
-                    "seconds": time.perf_counter() - t0, "attempts": attempt, "method": "sentence_fallback",
-                    "n_sentences": len(spans), "whole_error": r["error"]}
+            out = {"ok": True, "text": join_sentences(text, spans, outs), "rules": rules, "counter": counter,
+                   "seconds": time.perf_counter() - t0, "attempts": attempt,
+                   "method": "no_coref" if no_coref else "sentence_fallback",
+                   "n_sentences": len(spans), "no_coref_sentences": no_coref, "whole_error": r["error"]}
+            if no_coref:
+                out["coref_dependent_features"] = coref_dependent_features(dialect)
+            return out
         except Exception as e:  # noqa: BLE001
             last_err = f"{type(e).__name__}: {e}"
     return {"ok": False, "error": last_err, "whole_error": r["error"], "attempts": 2, "method": "failed",

@@ -3,7 +3,7 @@ the joined passage keeps the SAE sentence order and the text between sentences e
 spans move to passage offsets, and every passage is tagged with its rendering method."""
 import re
 
-from idea86.render import join_sentences, render_passage
+from idea86.render import coref_dependent_features, join_sentences, render_passage
 from idea86.survival import diff_ops, tokens
 
 
@@ -76,3 +76,58 @@ def test_whole_and_failed_methods():
     assert r["ok"] and r["method"] == "whole" and r["text"] == "The river be long."
     f = render_passage(FakeDialect(fail_always=True), TEXT, 1, spans_fn=spans_strip)
     assert not f["ok"] and f["method"] == "failed" and f["attempts"] == 2
+
+
+class CorefDialect(FakeDialect):
+    """Like FakeDialect, but its coreference step fails on sentences with an en-dash, as
+    value-nlp 0.3 does when spaCy and Stanza split such a sentence differently."""
+
+    def create_coref_cluster(self, text):
+        if "\u2013" in text:
+            raise AssertionError("Spacy and Stanza word mismatch")
+        return []
+
+    def transform(self, text):
+        self.create_coref_cluster(text)
+        return super().transform(text)
+
+
+DASH = "Roy is a reformer.  He is famous (1772\u20131833) here.\nThe city is old."
+
+
+def test_no_coref_last_resort():
+    d = CorefDialect()
+    r = render_passage(d, DASH, 3, spans_fn=spans_strip)
+    assert r["ok"] and r["method"] == "no_coref" and r["no_coref_sentences"] == [1]
+    assert r["text"] == DASH.replace(" is ", " be ")            # exact twin: order and spacing kept
+    assert "coref_dependent_features" in r
+    try:                                                       # coreference is on again afterwards
+        d.transform("He is famous (1772\u20131833).")
+        raise AssertionError("coreference step was not restored")
+    except AssertionError as e:
+        assert "Spacy and Stanza" in str(e)
+    plain = render_passage(CorefDialect(), "Roy is a reformer.  The city is old.", 3, spans_fn=spans_strip)
+    assert plain["method"] == "sentence_fallback" and plain["no_coref_sentences"] == []
+
+
+class _Feat:
+    morphosyntax_transforms = {"uses_direct": 1, "uses_helper": 1, "no_coref_use": 1}
+
+    def uses_direct(self):
+        return self.coref_clusters
+
+    def helper(self):
+        return [c for c in self.coref_clusters]
+
+    def uses_helper(self):
+        return self.helper()
+
+    def no_coref_use(self):
+        return self.other()
+
+    def other(self):
+        return 1
+
+
+def test_coref_dependent_features():
+    assert coref_dependent_features(_Feat()) == ["uses_direct", "uses_helper"]
