@@ -112,10 +112,26 @@ def load(path="configs/p0.yaml") -> Config:
 
 
 def model_path(repo: str, revision: str) -> str:
-    """Local snapshot of a pinned model revision in the Hugging Face cache (HF_HOME).
-    With HF_HUB_OFFLINE=1 (compute nodes) this only reads the cache; `download` fills it."""
-    from huggingface_hub import snapshot_download
-    return snapshot_download(repo_id=repo, revision=revision)
+    """Local snapshot folder of a pinned model revision in the Hugging Face cache (HF_HOME).
+
+    The download step fetches each model with duplicate weight formats skipped (for example
+    *.bin next to *.safetensors), so asking huggingface_hub to verify the whole repository
+    would try to fetch those files, which fails on offline compute nodes. The snapshot folder
+    for the pinned commit is therefore used directly. If it is missing: with HF_HUB_OFFLINE=1
+    this stops with a clear message; otherwise the model is downloaded with the same rules
+    as the download step."""
+    import os
+
+    hub = os.environ.get("HF_HUB_CACHE") or os.path.join(
+        os.environ.get("HF_HOME") or os.path.join(os.path.expanduser("~"), ".cache", "huggingface"), "hub")
+    snap = os.path.join(hub, "models--" + repo.replace("/", "--"), "snapshots", revision)
+    if os.path.isfile(os.path.join(snap, "config.json")):
+        return snap
+    if os.environ.get("HF_HUB_OFFLINE") == "1":
+        raise SystemExit(f"model {repo} at {revision} is not in the cache ({snap}); run ./run_pilot.sh download "
+                         "on the login node")
+    from .data import _snapshot
+    return _snapshot(repo, revision)
 
 
 # ---------------------------------------------------------------- provenance
