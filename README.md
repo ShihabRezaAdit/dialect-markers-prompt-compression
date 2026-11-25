@@ -129,8 +129,8 @@ internal plan's decisions log:
     numpy 1.x, so `envs/env-render.txt` and `envs/env-sc.txt` add `numpy<2`. Stanza 1.8.2 (pinned
     by value-nlp) cannot load its models under torch 2.6 or later, so `envs/env-render.txt` also
     pins `torch<2.6`, `transformers>=4.40,<4.50` and `peft<0.15` (decisions log).
-    `envs/env-compress.txt` pins `transformers>=4.40,<4.50`: under transformers 5, llmlingua 0.2.2
-    with Llama-2 (L1, LL) kept about 90% and 80% of tokens at rate 0.5 in the smoke run.
+    `envs/env-compress.txt` pins `transformers>=4.40,<4.50`, the release line llmlingua 0.2.2 was
+    written for (L1/LL outputs were identical under 4.49 and 5.24 in the smoke run).
 
 Decided during pilot preparation (smoke run; decisions log, internal plan):
 
@@ -141,3 +141,7 @@ Decided during pilot preparation (smoke run; decisions log, internal plan):
     Every text is tagged `whole`, `sentence_fallback`, `no_coref` or `failed`; `render-collect`
     and the report give the counts per dialect and the features that read coreference; the
     report adds sensitivity analyses without no-coref passages and without any fallback passages.
+17. **LLMLingua window.** L1 and LL use `iterative_size = min(200, Llama-2 tokens of the text)`:
+    llmlingua 0.2.2 keeps almost every token of a text shorter than its window (smoke run: texts
+    under about 200 tokens kept 98-100% at rate 0.5). The window is recorded per text, and the
+    report gives keep rates per compressor and text-length group.

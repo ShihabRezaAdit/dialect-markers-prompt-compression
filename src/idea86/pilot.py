@@ -418,6 +418,7 @@ def measure(run: Run) -> dict:
                   if k.startswith("A:") and k.endswith(f":{g}:{c}") and comp[k].get("achieved_keep_rate") is not None]
             res["keep_rates"][f"{c}_{g}"] = {"mean": float(np.mean(ks)) if ks else None, "n": len(ks)}
     res["sc_excluded"] = sum(1 for k, v in comp.items() if k.endswith(":SC") and v.get("excluded"))
+    res["keep_by_length"] = keep_by_length(comp)
 
     # Arm B answer survival
     for c in ("LL", "R"):
@@ -444,6 +445,27 @@ def measure(run: Run) -> dict:
     res["primary_set"] = sorted(q for q in pres["A"] if pres["A"][q] and pres["C"][q])
     res["rendering"] = rendering_summary(read_json(run.p("render", "rendered.json")))
     return res
+
+
+LENGTH_GROUPS = ((1, 49), (50, 99), (100, 149), (150, 10**9))
+
+
+def keep_by_length(comp: dict) -> dict:
+    """Mean achieved word keep rate per compressor and source-text length group (word tokens),
+    and for L1 and LL also by LLMLingua window (shorter than 200 tokens, or 200) (decisions
+    log: LLMLingua window)."""
+    out: dict = {}
+    for v in comp.values():
+        c, kr, n = v.get("compressor"), v.get("achieved_keep_rate"), v.get("n_words")
+        if c is None or kr is None or n is None:
+            continue
+        lo, hi = next(g for g in LENGTH_GROUPS if g[0] <= n <= g[1])
+        key = f"{c} | words {lo}-{hi}" if hi < 10**9 else f"{c} | words {lo}+"
+        out.setdefault(key, []).append(kr)
+        if v.get("iterative_size") is not None:
+            wk = f"{c} | window {'200' if v['iterative_size'] >= 200 else '<200 (= text length)'}"
+            out.setdefault(wk, []).append(kr)
+    return {k: {"mean": float(np.mean(x)), "n": len(x)} for k, x in sorted(out.items())}
 
 
 def tweet_measures(run: Run, comp: dict) -> dict:
@@ -732,6 +754,10 @@ def write_report(run: Run, res, sig, gts, acc, proj, nf=None) -> None:
     for k, v in res["ratio"].items():
         L.append(f"- r {k}: {v['r']:.3f} [{v['ci95'][0]:.3f}, {v['ci95'][1]:.3f}]")
     L += ["", f"## Tweets ({res['tweets']['source']})", "", "```", json.dumps(res["tweets"], indent=1, default=str), "```"]
+    L += ["", "## Achieved keep rate by compressor and text length", "",
+          "| Compressor and group | Mean word keep rate | Texts |", "|---|---|---|"]
+    for k, v in res.get("keep_by_length", {}).items():
+        L.append(f"| {k} | {v['mean']:.3f} | {v['n']} |")
     L += ["", f"Selective Context texts over the GPT-2 window: {res['sc_excluded']}", "",
           "## Preliminary accuracy (labeled as not powered)", ""]
     for k, v in acc.items():

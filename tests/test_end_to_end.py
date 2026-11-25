@@ -105,6 +105,7 @@ def test_pilot_dry_run():
         rep = run.p("report", "P0_report.md").read_text()
         assert "Recommended outcome" in rep and "partial words counted as kept" in rep
         assert "no-coreference sentences, failures" in rep
+        assert "Achieved keep rate by compressor and text length" in rep
         assert "without no-coreference passages" in rep and "without sentence-fallback and no-coreference passages" in rep
         summ = json.loads(run.p("render", "summary.json").read_text())
         assert summ["passage_A"]["sentence_fallback"] == 30 and summ["passage_A"]["no_coref"] == 30

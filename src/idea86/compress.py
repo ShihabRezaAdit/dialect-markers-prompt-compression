@@ -19,6 +19,7 @@ from .config import model_path
 from .survival import achieved_keep_rate, tokens
 
 SEED = 86
+ITERATIVE_SIZE = 200   # internal plan: LLMLingua window; per text min(200, text length)
 RENDER_INDEX = {"S": 0, "A": 1, "C": 2, "SAE": 0, "AAE": 1, "MAE": 0}
 
 
@@ -50,16 +51,29 @@ class LLMLinguaFamily:
             self._xlmr = self._PC(model_name=self.path_xlmr, use_llmlingua2=True)
         return self._xlmr
 
+    def window(self, text: str) -> int:
+        """iterative_size for one text: min(200, Llama-2 tokens of the text being compressed).
+
+        llmlingua 0.2.2 assumes the text fills at least one window; for a shorter text it
+        marks almost every token as kept (smoke run: 98-100% kept at rate 0.5). With the
+        window equal to the text length the library compresses it as intended; texts of 200
+        tokens or more use 200, as before (decisions log)."""
+        n = self.llama.get_token_length(text, add_special_tokens=False)
+        return max(1, min(ITERATIVE_SIZE, n))
+
     def l1(self, text: str, rho: float) -> dict:
-        return self.llama.compress_prompt([text], rate=rho, use_context_level_filter=False,
-                                          use_token_level_filter=True, iterative_size=200,
-                                          condition_in_question="none")
+        w = self.window(text)
+        res = self.llama.compress_prompt([text], rate=rho, use_context_level_filter=False,
+                                         use_token_level_filter=True, iterative_size=w,
+                                         condition_in_question="none")
+        return {**res, "iterative_size": w}
 
     def l2(self, text: str, rho: float) -> dict:
         return self.xlmr.compress_prompt([text], rate=rho, force_tokens=["\n", "?"])
 
     def ll(self, passage: str, question: str, rho: float = 0.5) -> dict:
-        res = self.llama.compress_prompt([passage], question=question, rate=rho,
+        w = self.window(passage)
+        res = self.llama.compress_prompt([passage], question=question, rate=rho, iterative_size=w,
                                          condition_in_question="after_condition", condition_compare=True,
                                          rank_method="longllmlingua", use_context_level_filter=False,
                                          reorder_context="original", context_budget="+100",
@@ -73,6 +87,7 @@ class LLMLinguaFamily:
         res = dict(res)
         res["compressed_prompt"] = cp[: -len(suffix)]
         res["question_stripped"] = True
+        res["iterative_size"] = w
         return res
 
 
@@ -134,7 +149,10 @@ def record(job: dict, res: dict, secs: float) -> dict:
     cp = res.get("compressed_prompt")
     rec = {**{k: v for k, v in job.items() if k not in ("text", "question_text")},
            "compressed": cp, "seconds": secs,
-           "origin_tokens": res.get("origin_tokens"), "compressed_tokens": res.get("compressed_tokens")}
+           "origin_tokens": res.get("origin_tokens"), "compressed_tokens": res.get("compressed_tokens"),
+           "n_words": len(tokens(job["text"]))}
+    if res.get("iterative_size") is not None:
+        rec["iterative_size"] = res["iterative_size"]
     if "excluded" in res:
         rec["excluded"] = res["excluded"]
     if cp is not None:
