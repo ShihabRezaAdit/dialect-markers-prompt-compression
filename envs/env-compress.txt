@@ -1,4 +1,7 @@
 # Compression with L1, L2 and LL (internal plan Section 27).
 llmlingua==0.2.2
+# llmlingua 0.2.2 scores tokens with Llama-2 through the transformers 4.x past_key_values API; under
+# transformers 5 L1 and LL kept about 90% and 80% of tokens at rate 0.5 (ARCC2 smoke run), so 4.x is pinned.
+transformers>=4.40,<4.50
 huggingface_hub
 openpyxl

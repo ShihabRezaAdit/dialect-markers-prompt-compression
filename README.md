@@ -129,6 +129,8 @@ internal plan's decisions log:
     numpy 1.x, so `envs/env-render.txt` and `envs/env-sc.txt` add `numpy<2`. Stanza 1.8.2 (pinned
     by value-nlp) cannot load its models under torch 2.6 or later, so `envs/env-render.txt` also
     pins `torch<2.6`, `transformers>=4.40,<4.50` and `peft<0.15` (decisions log).
+    `envs/env-compress.txt` pins `transformers>=4.40,<4.50`: under transformers 5, llmlingua 0.2.2
+    with Llama-2 (L1, LL) kept about 90% and 80% of tokens at rate 0.5 in the smoke run.
 
 Decided during pilot preparation (smoke run; decisions log, internal plan):
 
