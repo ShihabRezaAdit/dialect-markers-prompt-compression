@@ -19,8 +19,11 @@ named below; nothing is chosen at run time.
 
 ## The pilot checks in plain words
 
-**Gates** ask "can we trust the pipeline?" A failed gate is fixed and re-checked; it never stops
-the project on its own. **Signals** ask "is an effect large enough to lead the paper?"
+**Gates** ask "can we trust the pipeline?" Gate-fix rule: apart from the actions in the gates
+table, a fix may only correct a bug, environment or input problem (never thresholds, the decision
+rule, item lists, labels or the design); each fix is logged with its cause before the re-check; at
+most 2 extra days; a gate that still fails is decided by the project lead, logged with its reason
+and reported to the advisor in the pilot report. **Signals** ask "is an effect large enough to lead the paper?"
 
 | ID | Plain question | Met when |
 |---|---|---|

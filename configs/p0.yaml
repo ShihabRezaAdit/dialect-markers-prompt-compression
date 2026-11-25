@@ -12,8 +12,8 @@ paths:
 # SHA-256 of the binding plan sources and the annotation guide, recorded in the
 # pre-commitment (the plans are LaTeX files outside this repository).
 plan_sources:
-  internal_plan_tex: 51bc2847cbf41f7e7af54aa023cda1555109898d7dd0b1b4605343f57a41157d
-  pilot_plan_tex: 971bb88137b67795891e9175bbf345f4948f6677bb8332a2b61b26f0bfd10d37
+  internal_plan_tex: ae00f7e0953c0f18fff14009126b7663ceb0bc6ef70a2a914013698c73d50c58
+  pilot_plan_tex: 0d2268c2e03f5a034b560be315c02c70ba9d59fd01de7c8ed785cd379a3c0690
   annotation_guide_pdf: db6115222a1976e8b3fb78726e1a2c1f016bb79dded43c5ab8d2f97626d486a0   # P0_annotation/Idea86_Annotation_Guide.pdf
 
 data:
@@ -103,7 +103,7 @@ signals:
   s2_alpha: 0.05
 
 decision_rule:
-  applies_when: G1 to G5 pass (a failed gate is fixed and re-checked first; one that still fails is reported to the advisor, who decides)
+  applies_when: G1 to G5 pass, or a gate that still fails was decided under the gate-fix rule (fixes only for bug, environment or input problems apart from the gates-table actions; each logged with its cause before the re-check; at most 2 extra days; then the project lead decides, logs the reason and reports it to the advisor)
   Go: S1 and S2 met; E1 to E6 in full; the paper leads with RQ1 and RQ2
   Go, retention focus: S1 met, S2 not; E1 to E6 in full; the paper leads with RQ1 and RQ3
   Go, realistic-pipeline focus: S2 met, S1 not; E1 to E6 in full; the paper leads with RQ2
