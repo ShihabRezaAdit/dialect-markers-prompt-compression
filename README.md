@@ -145,3 +145,8 @@ Decided during pilot preparation (smoke run; decisions log, internal plan):
     llmlingua 0.2.2 keeps almost every token of a text shorter than its window (smoke run: texts
     under about 200 tokens kept 98-100% at rate 0.5). The window is recorded per text, and the
     report gives keep rates per compressor and text-length group.
+18. **Batch-invariant generation.** `generate.batch_invariant: true` sets `VLLM_BATCH_INVARIANT=1`, so
+    answers do not depend on batching (smoke G1 re-generation matched only 196 and 195 of 200
+    without it). The run stops if vLLM lacks the setting. Fallback, fixed in the plan: if it fails
+    or is more than about 3x slower, G1 re-generates in the original batches and a batch noise
+    floor is reported next to the flip rates. The G1 threshold stays 196 of 200.

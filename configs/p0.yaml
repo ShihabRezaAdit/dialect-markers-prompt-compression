@@ -12,8 +12,8 @@ paths:
 # SHA-256 of the binding plan sources and the annotation guide, recorded in the
 # pre-commitment (the plans are LaTeX files outside this repository).
 plan_sources:
-  internal_plan_tex: 03a4983889058fff2bf1fafe95d06516851123ed3f966999e1d5824c6f98064c
-  pilot_plan_tex: d28eec49d03d4750f6ef4396a2e7ddace659a63176b73c5c66fc29634c8deaaa
+  internal_plan_tex: 7d24f964391bc55c0eb45b0e8a4924e6c631a2d5648f7109dd4411c6aea8ccae
+  pilot_plan_tex: 1cc29e55eea221703622db453d093facd01e0ad031f783b2789d2b79714b129c
   annotation_guide_pdf: db6115222a1976e8b3fb78726e1a2c1f016bb79dded43c5ab8d2f97626d486a0   # P0_annotation/Idea86_Annotation_Guide.pdf
 
 data:
@@ -77,6 +77,7 @@ generate:
   temperature: 0.0
   max_tokens: 32
   seed: 86
+  batch_invariant: true            # VLLM_BATCH_INVARIANT=1: outputs independent of batching (decisions log)
 
 stats:
   bootstrap_resamples: 2000

@@ -460,10 +460,10 @@ def keep_by_length(comp: dict) -> dict:
         if c is None or kr is None or n is None:
             continue
         lo, hi = next(g for g in LENGTH_GROUPS if g[0] <= n <= g[1])
-        key = f"{c} | words {lo}-{hi}" if hi < 10**9 else f"{c} | words {lo}+"
+        key = f"{c}, words {lo}-{hi}" if hi < 10**9 else f"{c}, words {lo}+"
         out.setdefault(key, []).append(kr)
         if v.get("iterative_size") is not None:
-            wk = f"{c} | window {'200' if v['iterative_size'] >= 200 else '<200 (= text length)'}"
+            wk = f"{c}, window {'200' if v['iterative_size'] >= 200 else '<200 (= text length)'}"
             out.setdefault(wk, []).append(kr)
     return {k: {"mean": float(np.mean(x)), "n": len(x)} for k, x in sorted(out.items())}
 

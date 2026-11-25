@@ -9,6 +9,7 @@ Run as a GPU job: ./run_pilot.sh generate submits one job per model.
 from __future__ import annotations
 
 import hashlib
+import os
 import time
 
 from .config import model_path
@@ -29,10 +30,29 @@ def prompt_hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:20]
 
 
+def _batch_invariant_on() -> str:
+    """Check that the pinned vLLM knows VLLM_BATCH_INVARIANT and that it is on; stop otherwise
+    (decisions log: batch-invariant generation)."""
+    import vllm
+    import vllm.envs as envs
+
+    try:
+        on = bool(envs.VLLM_BATCH_INVARIANT)
+    except AttributeError:
+        raise SystemExit(f"vLLM {vllm.__version__} has no VLLM_BATCH_INVARIANT; see the decisions-log fallback")
+    if not on:
+        raise SystemExit("VLLM_BATCH_INVARIANT is not active")
+    return vllm.__version__
+
+
 def run(prompts: list[dict], model_id: str, cfg, batch_size: int = 512) -> list[dict]:
+    g = cfg["generate"]
+    if g.get("batch_invariant"):
+        # Outputs must not depend on how prompts are grouped into batches (G1, flips).
+        os.environ["VLLM_BATCH_INVARIANT"] = "1"
     from vllm import LLM, SamplingParams  # env-gen only
 
-    g = cfg["generate"]
+    vllm_version = _batch_invariant_on() if g.get("batch_invariant") else None
     m = cfg["generate"]["models"][model_id]
     path = model_path(m["repo"], m["revision"])
     llm = LLM(model=path, dtype=g["dtype"], max_model_len=g["max_model_len"],
@@ -68,5 +88,7 @@ def run(prompts: list[dict], model_id: str, cfg, batch_size: int = 512) -> list[
                      "n_output_tokens": r["n_output_tokens"],
                      "n_prompt_tokens": len(tok(p["prompt"], add_special_tokens=False)["input_ids"])})
     rows.append({"_meta": True, "model": model_id, "repo": m["repo"], "revision": m["revision"],
-                 "unique_prompts": len(keys), "seconds": secs, "chat_template_probe": template_probe})
+                 "unique_prompts": len(keys), "seconds": secs, "seconds_per_prompt": secs / max(1, len(keys)),
+                 "batch_invariant": bool(g.get("batch_invariant")), "vllm_version": vllm_version,
+                 "chat_template_probe": template_probe})
     return rows
