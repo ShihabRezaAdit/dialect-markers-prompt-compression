@@ -1,23 +1,23 @@
 # P0 pre-commitment (Idea 86)
 
-Written 2026-11-25T17:11:43Z at git commit `79805a7257e546ef87230042dedeffed9acdc80d`. Thresholds, rules, samples and seeds below do not change after this file is committed; any change is logged with its reason in the decisions log and reported in the paper.
+Written 2026-11-25T21:15:54Z at git commit `c9c7ca57480fd26699b68adc8bcc2c5d327df2c0`. Thresholds, rules, samples and seeds below do not change after this file is committed; any change is logged with its reason in the decisions log and reported in the paper.
 
 Rendering, compression and generation of pilot items verify the block below and refuse to start if anything differs.
 
 ```json
 {
  "meta": {
-  "git_commit": "79805a7257e546ef87230042dedeffed9acdc80d",
+  "git_commit": "c9c7ca57480fd26699b68adc8bcc2c5d327df2c0",
   "unit_tests": {
-   "code_hash": "4868551d95bff1bd93710e697a972aa769693b882917fc30680702d2ef224681",
-   "git_commit": "79805a7257e546ef87230042dedeffed9acdc80d",
+   "code_hash": "6553dfc711df76e42958ac6b7fddfc78363d15ad12941d6093a1df22c11e7c2f",
+   "git_commit": "c9c7ca57480fd26699b68adc8bcc2c5d327df2c0",
    "passed": true,
-   "utc": "2026-11-25T16:59:12Z"
+   "utc": "2026-11-25T21:15:31Z"
   },
-  "written_utc": "2026-11-25T17:11:43Z"
+  "written_utc": "2026-11-25T21:15:54Z"
  },
  "state": {
-  "code_hash": "4868551d95bff1bd93710e697a972aa769693b882917fc30680702d2ef224681",
+  "code_hash": "6553dfc711df76e42958ac6b7fddfc78363d15ad12941d6093a1df22c11e7c2f",
   "config_hash": "308b10e4ae5fb0e513b0ce6e143694503370a25337c4f05dc1dd4712c83346eb",
   "decision_rule": {
    "Go": "S1 and S2 met; E1 to E6 in full; the paper leads with RQ1 and RQ2",
