@@ -89,6 +89,11 @@ class LLMLinguaFamily:
         return self.xlmr.compress_prompt([text], rate=rho, force_tokens=["\n", "?"])
 
     def ll(self, passage: str, question: str, rho: float = 0.5) -> dict:
+        # Input fix (decisions log): llmlingua 0.2.2 asserts that the passage start survives a Llama
+        # tokenizer round trip after the question; a passage that starts with whitespace fails it.
+        # Leading and trailing whitespace is removed; every other passage is passed unchanged.
+        stripped = passage != passage.strip()
+        passage = passage.strip()
         w = self.window(passage)
         res = self.llama.compress_prompt([passage], question=question, rate=rho, iterative_size=w,
                                          condition_in_question="after_condition", condition_compare=True,
@@ -105,6 +110,7 @@ class LLMLinguaFamily:
         res["compressed_prompt"] = cp[: -len(suffix)]
         res["question_stripped"] = True
         res["iterative_size"] = w
+        res["input_stripped"] = stripped
         return res
 
 
@@ -170,6 +176,8 @@ def record(job: dict, res: dict, secs: float) -> dict:
            "n_words": len(tokens(job["text"]))}
     if res.get("iterative_size") is not None:
         rec["iterative_size"] = res["iterative_size"]
+    if res.get("input_stripped"):
+        rec["input_stripped"] = True
     if "excluded" in res:
         rec["excluded"] = res["excluded"]
     if cp is not None:

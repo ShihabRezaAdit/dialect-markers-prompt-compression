@@ -69,3 +69,14 @@ def test_legacy_cache_shim_converts_lists_only():
     obj = FakeCache()
     w(None, "", "token", past_key_values=obj)
     assert seen[-1] is obj and w._idea86_shim
+
+
+def test_ll_strips_edge_whitespace_only():
+    f = fam()
+    r = f.ll(" Hong Kong: the event was held. ", "Where?", 0.5)
+    assert r["input_stripped"] is True and r["iterative_size"] == 6
+    assert f._llama.calls[-1]["question"] == "Where?"
+    r2 = f.ll("Hong Kong: the event was held.", "Where?", 0.5)
+    assert r2["input_stripped"] is False
+    rec = K.record({"job_id": "B:12:S:LL", "compressor": "LL", "text": " a b"}, r, 0.1)
+    assert rec["input_stripped"] is True
