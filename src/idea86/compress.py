@@ -91,9 +91,9 @@ class LLMLinguaFamily:
     def ll(self, passage: str, question: str, rho: float = 0.5) -> dict:
         # Input fix (decisions log): llmlingua 0.2.2 asserts that the passage start survives a Llama
         # tokenizer round trip after the question; a passage that starts with whitespace fails it.
-        # Leading and trailing whitespace is removed; every other passage is passed unchanged.
-        stripped = passage != passage.strip()
-        passage = passage.strip()
+        # Leading whitespace is removed; every other passage (trailing spaces included) is unchanged.
+        stripped = passage != passage.lstrip()
+        passage = passage.lstrip()
         w = self.window(passage)
         res = self.llama.compress_prompt([passage], question=question, rate=rho, iterative_size=w,
                                          condition_in_question="after_condition", condition_compare=True,
