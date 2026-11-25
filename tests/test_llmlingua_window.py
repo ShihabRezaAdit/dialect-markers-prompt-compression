@@ -46,3 +46,26 @@ def test_record_keeps_window_and_length_and_report_groups():
     kb = keep_by_length({"x": rec, "y": {**rec, "n_words": 160, "iterative_size": 200, "achieved_keep_rate": 0.4}})
     assert kb["L1, words 1-49"]["mean"] == 0.5 and kb["L1, words 150+"]["mean"] == 0.4
     assert kb["L1, window <200 (= text length)"]["n"] == 1 and kb["L1, window 200"]["n"] == 1
+
+
+def test_legacy_cache_shim_converts_lists_only():
+    class FakeCache:
+        @classmethod
+        def from_legacy_cache(cls, pairs):
+            c = cls()
+            c.pairs = pairs
+            return c
+
+    seen = []
+
+    def get_ppl(self, text, granularity, input_ids=None, attention_mask=None, past_key_values=None, **kw):
+        seen.append(past_key_values)
+        return "ok"
+
+    w = K.legacy_cache_shim(get_ppl, FakeCache)
+    assert w(None, "", "token", past_key_values=None) == "ok" and seen[-1] is None
+    w(None, "", "token", past_key_values=[["k0", "v0"], ["k1", "v1"]])
+    assert isinstance(seen[-1], FakeCache) and seen[-1].pairs == (("k0", "v0"), ("k1", "v1"))
+    obj = FakeCache()
+    w(None, "", "token", past_key_values=obj)
+    assert seen[-1] is obj and w._idea86_shim

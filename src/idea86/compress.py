@@ -30,10 +30,27 @@ def _path(cfg, key: str) -> str:
 
 # ---------------------------------------------------------------- llmlingua family
 
+def legacy_cache_shim(get_ppl, cache_cls):
+    """Wrap llmlingua 0.2.2's PromptCompressor.get_ppl so that a key/value cache passed as a list of
+    [key, value] pairs (llmlingua slices the cache this way between windows) is turned into the
+    cache object transformers 4.4x expects. Older transformers converted it internally; 4.49 raises
+    "'list' object has no attribute 'get_seq_length'" on the third window of a long text. The
+    tensors are unchanged (decisions log: cache conversion)."""
+    def wrapped(self, *args, past_key_values=None, **kwargs):
+        if isinstance(past_key_values, (list, tuple)):
+            past_key_values = cache_cls.from_legacy_cache(tuple((k, v) for k, v in past_key_values))
+        return get_ppl(self, *args, past_key_values=past_key_values, **kwargs)
+    wrapped._idea86_shim = True
+    return wrapped
+
+
 class LLMLinguaFamily:
     def __init__(self, path_llama2: str | None = None, path_xlmr: str | None = None):
         from llmlingua import PromptCompressor  # env-compress only
+        from transformers import DynamicCache
 
+        if not getattr(PromptCompressor.get_ppl, "_idea86_shim", False):
+            PromptCompressor.get_ppl = legacy_cache_shim(PromptCompressor.get_ppl, DynamicCache)
         self._PC = PromptCompressor
         self.path_llama2, self.path_xlmr = path_llama2, path_xlmr
         self._llama = None
