@@ -59,7 +59,7 @@ qos() { local e=(); [ -n "${ACCOUNT:-}" ] && e+=(--account "$ACCOUNT"); [ -n "${
 gpu() {  # gpu <job-name> <env> <idea86 args...>
   local name="$1" env="$2"; shift 2
   sbatch --parsable --job-name "$name" --partition "$PARTITION" --gres "$GPU_GRES" \
-    --cpus-per-task "$CPUS_PER_TASK" --mem "$MEM" --time "$TIME_GPU" $(qos) \
+    --cpus-per-task "$CPUS_PER_TASK" --mem "$MEM" --time "$([ $SMOKE = 1 ] && echo "${TIME_GPU_SMOKE:-00:30:00}" || echo "$TIME_GPU")" $(qos) \
     --output "logs/%x_%j.out" slurm/gpu_job.sbatch "$env" "$@"
 }
 
