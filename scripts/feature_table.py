@@ -6,6 +6,8 @@ meaning-preserving Multi-VALUE feature subset, and post-hoc S1 sensitivity analy
             pairs whose note quotes the SAE words of one of its entries (env-stats)
   features  the morphosyntactic features of AfricanAmericanVernacular, ColloquialSingaporeDialect
             and IndianDialect with their probabilities (env-render; loads value-nlp)
+  remaining per dialect, rule-log entries per pilot passage that remain when the --exclude rule
+            types are left out of the current renderings (an estimate before re-rendering) (env-stats)
   s1post    post-hoc S1 on the current data: (a) only the audited pairs labelled
             CONTENT_PRESERVED = YES; (b) all pilot paragraphs, with replace ops typed by the
             rule types given in --exclude left out (env-stats). Exploratory; not a gate input.
@@ -84,6 +86,36 @@ def features() -> str:
     return "\n".join(out)
 
 
+def remaining(exclude: list[str]) -> str:
+    import numpy as np
+
+    items = json.load(open(RUN / "items.json"))
+    rend = json.load(open(RUN / "render" / "rendered.json"))
+    ex = set(exclude)
+    out = ["# Follow-up: markers per pilot passage before and after the feature subset (estimate from current logs)", "",
+           f"Left out: {', '.join(sorted(ex))}", "",
+           "| Dialect | Passages | Entries now (mean, median) | Entries kept (mean, median) | Share kept | Passages with >= 1 / >= 3 kept | Feature types kept |",
+           "|---|---|---|---|---|---|---|"]
+    for d in ("A", "C"):
+        now, kept, types = [], [], set()
+        for p in items["passages"]:
+            r = rend.get(f"passage:{p['pos']}:{d}")
+            if not r or not r.get("ok"):
+                continue
+            rules = r.get("rules", [])
+            k = [x for x in rules if x["type"] not in ex]
+            types |= {x["type"] for x in k}
+            now.append(len(rules))
+            kept.append(len(k))
+        now, kept = np.array(now), np.array(kept)
+        out.append(f"| {'AAVE' if d == 'A' else 'CollSgE'} | {len(now)} | {now.mean():.1f}, {np.median(now):.0f} | "
+                   f"{kept.mean():.1f}, {np.median(kept):.0f} | {kept.sum() / max(1, now.sum()):.2f} | "
+                   f"{(kept >= 1).mean():.2f} / {(kept >= 3).mean():.2f} | {len(types)} |")
+    out += ["", "CollSgE is replaced by IndianDialect; its row only shows how much the list removes from a "
+            "rule-based dialect. IndianDialect is counted after its rendering.", ""]
+    return "\n".join(out)
+
+
 def s1post(exclude: list[str]) -> str:
     import numpy as np
     from idea86 import survival as sv
@@ -109,8 +141,8 @@ def s1post(exclude: list[str]) -> str:
         ops = sv.diff_ops(st, dt)
         if drop:
             ops = [o for o in ops if not (o.tag == "replace" and sv.type_op(o, st, len(sae), rr.get("rules", [])) in drop)]
-        s_s = sv.survived(sv.word_survival(st, sv.tokens(cs["compressed"])))
-        s_d = sv.survived(sv.word_survival(dt, sv.tokens(cd["compressed"])))
+        s_s = sv.word_survival(st, sv.tokens(cs["compressed"]))   # status lists, as in metrics.delta_s_text
+        s_d = sv.word_survival(dt, sv.tokens(cd["compressed"]))
         return sv.paired_span_delta(ops, s_s, s_d)
 
     out = ["# Follow-up: post-hoc S1 sensitivity (exploratory; 95% percentile intervals, B = 2000)", ""]
@@ -135,10 +167,11 @@ def s1post(exclude: list[str]) -> str:
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("command", choices=["table", "features", "s1post"])
+    ap.add_argument("command", choices=["table", "features", "remaining", "s1post"])
     ap.add_argument("--exclude", default="")
     a = ap.parse_args()
-    text = {"table": table, "features": features}.get(a.command, lambda: s1post([x for x in a.exclude.split(",") if x]))()
+    exc = [x for x in a.exclude.split(",") if x]
+    text = {"table": table, "features": features, "remaining": lambda: remaining(exc)}.get(a.command, lambda: s1post(exc))()
     path = RUN / "audit" / f"followup_{a.command}.md"
     path.write_text(text, encoding="utf-8")
     print(text)
