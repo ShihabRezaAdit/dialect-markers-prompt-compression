@@ -1,7 +1,8 @@
 """Configuration, file helpers and provenance.
 
-Every run is described by the committed configs/p0.yaml; its hash, the code hash and the
-git commit go into every provenance record and into the pre-commitment.
+Every run is described by the committed configs/main.yaml (the pilot's configuration is
+archived with the pilot and never read); its hash, the code hash and the git commit go into every
+provenance record and into the pre-commitment.
 """
 from __future__ import annotations
 
@@ -88,17 +89,18 @@ class Config(dict):
         p = p if p.is_absolute() else ROOT / p
         return p.joinpath(*parts)
 
-    def run_dir(self, smoke: bool = False) -> Path:
-        d = self.path("runs_dir") / (self["experiment"] + ("_smoke" if smoke else ""))
+    def run_dir(self, exp: str | None = None) -> Path:
+        """Output folder of one experiment (E1, E2, E5) under runs_dir."""
+        d = self.path("runs_dir") / (exp or self.get("experiment") or "setup")
         d.mkdir(parents=True, exist_ok=True)
         return d
 
 
-REQUIRED = ["experiment", "seed", "paths", "plan_sources", "data", "sample", "render", "compress",
-            "generate", "stats", "gates", "signals", "decision_rule"]
+REQUIRED = ["study", "seed", "paths", "isolation", "plan_sources", "data", "sample", "render", "compress",
+            "mechanism", "stats", "hypotheses", "priorities"]
 
 
-def load(path="configs/p0.yaml") -> Config:
+def load(path="configs/main.yaml") -> Config:
     path = Path(path)
     if not path.is_absolute():
         path = (Path.cwd() / path) if (Path.cwd() / path).exists() else ROOT / path
@@ -128,7 +130,7 @@ def model_path(repo: str, revision: str) -> str:
     if os.path.isfile(os.path.join(snap, "config.json")):
         return snap
     if os.environ.get("HF_HUB_OFFLINE") == "1":
-        raise SystemExit(f"model {repo} at {revision} is not in the cache ({snap}); run ./run_pilot.sh download "
+        raise SystemExit(f"model {repo} at {revision} is not in the cache ({snap}); run ./run_main.sh download "
                          "on the login node")
     from .data import _snapshot
     return _snapshot(repo, revision)
@@ -159,7 +161,7 @@ def gpu_name() -> str | None:
 
 
 def provenance(cfg: Config, stage: str, extra: dict | None = None) -> dict:
-    rec = {"stage": stage, "experiment": cfg["experiment"], "config_hash": cfg.hash, "code_hash": code_hash(),
+    rec = {"stage": stage, "study": cfg.get("study", cfg.get("experiment")), "config_hash": cfg.hash, "code_hash": code_hash(),
            "git_commit": git_commit(), "host": socket.gethostname(), "platform": platform.platform(),
            "slurm_job_id": os.environ.get("SLURM_JOB_ID"),
            "slurm_array_task_id": os.environ.get("SLURM_ARRAY_TASK_ID"), "gpu": gpu_name(), "utc": now()}

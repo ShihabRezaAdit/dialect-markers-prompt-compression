@@ -255,3 +255,70 @@ def download(cfg) -> dict:
             print(f"[download] model {key}: {m['repo']} at {m['revision']}")
     write_json(out_path, revs)
     return revs
+
+
+# ---------------------------------------------------------------- main study
+
+def real_aae_rows_main(cfg) -> tuple[list[dict], list[int]]:
+    """The REAL-AAE CSV (checked against the SHA-256 recorded in the configuration) and the 0-based row
+    indices of the main-study sample: shuffle positions study_positions[0] to [1] (1-based)."""
+    from .config import sha256_file
+
+    c = cfg["data"]["real_aae"]
+    path = cfg.path("data_dir", c["file"])
+    if not path.exists():
+        raise SystemExit(f"{path} not found: run ./run_main.sh download on the login node")
+    sha = sha256_file(path)
+    if sha != c["sha256"]:
+        raise SystemExit(f"REAL-AAE file {path} has SHA-256 {sha}, expected {c['sha256']}")
+    rows = read_real_aae(path, cfg)
+    first, last = c["study_positions"]
+    return rows, real_aae_sample(len(rows), first, last)
+
+
+def meetingbank_path(cfg) -> str:
+    """Local path of the pinned MeetingBank-LLMCompressed parquet file in the Hugging Face cache."""
+    import os
+
+    c = cfg["data"]["meetingbank"]
+    hub = os.environ.get("HF_HUB_CACHE") or os.path.join(
+        os.environ.get("HF_HOME") or os.path.join(os.path.expanduser("~"), ".cache", "huggingface"), "hub")
+    p = os.path.join(hub, "datasets--" + c["repo"].replace("/", "--"), "snapshots", c["revision"], c["file"])
+    if os.path.isfile(p):
+        return p
+    if os.environ.get("HF_HUB_OFFLINE") == "1":
+        raise SystemExit(f"{c['repo']} at {c['revision']} is not in the cache ({p}); run ./run_main.sh download")
+    from huggingface_hub import hf_hub_download
+    return hf_hub_download(c["repo"], c["file"], repo_type="dataset", revision=c["revision"])
+
+
+def download_main(cfg) -> dict:
+    """Main-study preparation (login node, internet): SQuAD validation at its pinned revision (counts
+    checked), the REAL-AAE CSV (reused if present; SHA-256 checked), MeetingBank-LLMCompressed at its
+    pinned revision (row count checked) and the three compressor models."""
+    from .config import now, sha256_file, write_json
+
+    out = {"utc": now()}
+    paras = load_squad(cfg)
+    out["squad"] = {**cfg["data"]["squad"], "paragraphs": len(paras), "questions": sum(len(p["questions"]) for p in paras)}
+    print(f"[download] SQuAD validation: {len(paras)} paragraphs, {out['squad']['questions']} questions")
+    c = cfg["data"]["real_aae"]
+    path = cfg.path("data_dir", c["file"])
+    if not path.exists():
+        _fetch(c["url"], path)
+    rows, idx = real_aae_rows_main(cfg)
+    out["real_aae"] = {"rows": len(rows), "sha256": sha256_file(path), "study_rows": len(idx)}
+    print(f"[download] REAL-AAE: {len(rows)} rows, SHA-256 matches; {len(idx)} study rows")
+    mb = meetingbank_path(cfg)
+    import pyarrow.parquet as pq
+    n = pq.ParquetFile(mb).metadata.num_rows
+    if n != cfg["data"]["meetingbank"]["expected_rows"]:
+        raise SystemExit(f"MeetingBank-LLMCompressed: expected {cfg['data']['meetingbank']['expected_rows']} rows, got {n}")
+    out["meetingbank"] = {**cfg["data"]["meetingbank"], "rows": n, "sha256": sha256_file(mb)}
+    print(f"[download] MeetingBank-LLMCompressed: {n} rows at {cfg['data']['meetingbank']['revision']}")
+    out["models"] = {}
+    for key, m in cfg["compress"]["models"].items():
+        out["models"][key] = {"repo": m["repo"], "revision": m["revision"], "path": _snapshot(m["repo"], m["revision"])}
+        print(f"[download] model {key}: {m['repo']} at {m['revision']}")
+    write_json(cfg.path("data_dir", "revisions_main.json"), out)
+    return out

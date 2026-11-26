@@ -1,0 +1,111 @@
+# Main-study configuration (Idea 86). Every value is fixed by the internal plan (Sections 7 to 23,
+# 29) and the advisor's decisions after the pilot (decisions log). Nothing changes after the
+# main pre-commitment (prereg/prereg_main.md) except through an entry in the decisions log.
+# The pilot's configuration is archived with the pilot (git tag pilot-final) and is never read.
+study: main
+seed: 86
+
+paths:
+  data_dir: data            # shared raw downloads (SQuAD cache, REAL-AAE CSV, MeetingBank); not committed
+  runs_dir: runs            # main-study outputs: runs/E1, runs/E2, runs/E5; not committed
+  prereg_dir: prereg        # prereg_main.md is committed here
+
+isolation:                  # the main study may not read any file in these locations (src/idea86/isolation.py)
+  forbidden: [pilot, runs/pilot_archive, runs/P0, runs/P0_smoke, runs/P0_round1, P0_annotation, P0_results]
+
+plan_sources:               # SHA-256 of the binding plan sources and the frozen annotation guide
+  internal_plan_tex: ec0b6beae166f82f4ba754098a222ca0b81c2ab8d7c08ce44757629a0e2f7ebc
+  professor_proposal_tex: 4d6af222edf3a0be7a4397242391612aa2f58725fd6dfd52f272eef0c1d02c00
+  annotation_guide_pdf: db6115222a1976e8b3fb78726e1a2c1f016bb79dded43c5ab8d2f97626d486a0
+
+data:
+  squad:
+    repo: rajpurkar/squad
+    config: plain_text
+    revision: 7b6d24c440a36b6815f21b70d25016731768db1f
+    split: validation
+    expected_paragraphs: 2067
+    expected_questions: 10570
+  real_aae:
+    url: https://anonymous.4open.science/api/repo/dialect/file/data/real_aae/real_aae.csv
+    file: real_aae/real_aae.csv
+    expected_rows: 17479
+    text_columns: [aae_text, sae_text]
+    sha256: 7dba90985790315ede8fe9d5494408ce8355d74437d5e98cea2789fafc09e5bc   # the file downloaded for the pilot
+    study_positions: [201, 17479]   # 1-based positions after the seed-86 shuffle; 1 to 200 were used in development
+  meetingbank:                      # LLMLingua-2's training data (E5a only)
+    repo: microsoft/MeetingBank-LLMCompressed
+    revision: 9b8098be677863e6f8248085d2ba714d2b7845b7
+    file: data/train-00000-of-00001.parquet
+    expected_rows: 5169
+
+sample:
+  audit_pairs: 150                  # AAVE pairs, default_rng(86) permutation of SQuAD validation paragraphs
+  relabel_pairs: 20                 # drawn from the 150 with the same generator
+  relabel_min_days: 7
+  relabel_order_seed: 186           # display order of the re-label sheet
+
+render:
+  package: value-nlp==0.3
+  dialects:
+    A: AfricanAmericanVernacular    # confirmatory; Indian English (IndianDialect) only under X1
+  morphosyntax: true
+  disabled_features:                # meaning-preserving subset (decisions log; criteria A, B, C)
+    AfricanAmericanVernacular: [clefting, negative_inversion, inverted_indirect_question,
+      superlative_before_matrix_head, double_modals, present_modals, will_would, if_would,
+      no_gender_distinction, em_subj_pronoun, she_inanimate_objects, mass_noun_plurals,
+      plural_to_singular_human, corr_conjunction_doubling, zero_degree, null_relcl,
+      possessives_for_pre, aint_be]
+    IndianDialect: [inverted_indirect_question, fronting_pobj, double_obj_order, reduced_relative,
+      present_modals, will_would, if_would, no_gender_distinction, mass_noun_plurals,
+      plural_to_singular_human, corr_conjunction_doubling, zero_degree, null_prepositions,
+      null_relcl, drop_copula_be_locative]
+  protect_quotes: true
+  max_length_ratio: 1.3             # passages only
+  array_tasks: 64
+  k_offsets:                        # set_seed(86 + k)
+    squad_passage: 0
+    squad_question: 100000
+    coqa_story: 200000
+    tweet_row: 700000               # k_text for the random control on tweets
+
+compress:
+  rates: [0.75, 0.5, 0.33]
+  confirmatory_rate: 0.5
+  compressors: [L1, L2, SC]         # R is matched to L2 on the same text and rate
+  shards: {L1: 24, L2: 8, SC: 16}   # GPU array tasks per compressor (about 116,000 texts each over three rates; kept well under the 2-hour limit)
+  models:
+    llama2: {repo: NousResearch/Llama-2-7b-hf, revision: 8efe6c9b93655b934e27bd9981e3ec13e55aee9d}
+    xlmr: {repo: microsoft/llmlingua-2-xlm-roberta-large-meetingbank, revision: ebaba9b0e874dadd3003ffcff828e4397e568089}
+    gpt2: {repo: openai-community/gpt2, revision: 607a30d783dfa663caf39e06633721c8d4cfcd7e}
+  sc_reduce_level: phrase
+  sc_max_gpt2_tokens: 1024
+
+mechanism:                          # E5a, exploratory (internal plan Section 19)
+  rate: 0.5
+  scorers: [L1, L2, SC]             # L1: Llama-2 surprisal; L2: LLMLingua-2 keep probability; SC: GPT-2 self-information
+  shards: {L1: 8, L2: 2, SC: 8}
+  quantiles: 5
+  tweet_length_split: median        # short and long tweets split at the median AAE word count
+
+stats:
+  bootstrap_resamples: 2000
+  bootstrap_seed: 86
+  alpha: 0.05
+  equivalence_margin_delta_s: 0.03
+  random_control_interval: 0.90     # H1c: the 90% interval of R lies inside the margin
+
+hypotheses:                         # confirmatory families, AAVE only (decisions log)
+  F1: {measure: delta_s, corpus: squad, rate: 0.5, cells: [L1, L2, SC], correction: holm}
+  H1a: {compressor: L1, direction: positive}
+  H1b: {compressor: L2, direction: two-sided, expected: negative}
+  H1d: {compressor: SC, direction: two-sided}
+  H1c: {compressor: R, rule: 90% interval inside +-0.03}
+  replication_real_aae: {measure: delta_s, cells: [L1, L2, SC], correction: holm, rate: 0.5}
+  F2_F4: confirmatory only if their should-have experiment is run (E3, E4)
+  H3: {cells: 12 AAVE accuracy cells (delta_gamma), rule: supported if at least 6 cells significantly widen the gap and none significantly narrows it, primary_set: questions answer-preserved in AAVE, secondary_set: all questions}
+
+priorities:
+  must: [E1 AAVE rendering and 150-pair audit, E2 SQuAD AAVE and REAL-AAE retention at three rates, E5a mechanism]
+  should: [E3 accuracy and flips with four models (with E5b), CoQA retention, E4 realistic arm, E6 ReDial]
+  nice: [X4 marker-protection mitigation, X1 Indian English at full scale]

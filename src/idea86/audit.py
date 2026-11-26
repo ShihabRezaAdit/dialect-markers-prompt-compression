@@ -8,7 +8,8 @@ Export writes, for one sitting:
     <keysdir>/<sheet>_keys.json      pair_id -> item, dialect, automatic answer flag (stays on the cluster)
 The pair view shows no Multi-VALUE rule names (D1) and no automatic answer flag (D6).
 
-Driven by `./run_pilot.sh audit-export` and `./run_pilot.sh audit-import`.
+Driven by `./run_main.sh audit-export` and `./run_main.sh audit-import`. Main-study (E1) sheets add
+the TIME_HABIT_SHIFT column.
 """
 from __future__ import annotations
 
@@ -24,6 +25,19 @@ from .survival import diff_ops, tokens
 COLUMNS = ["pair_id", "dialect", "CONTENT_PRESERVED", "ANSWER_PRESERVED", "FLUENCY", "note"]
 ALLOWED = {"CONTENT_PRESERVED": ["YES", "NO"], "ANSWER_PRESERVED": ["YES", "NO"],
            "FLUENCY": ["NONE", "MINOR", "SEVERE"]}
+# Main-study sheets (E1) add one column so that the audit can be reported under both readings of
+# guide D5 (advisor's decision after P0): YES when the pair contains a tense, habit or voice shift,
+# whatever CONTENT_PRESERVED says. The note must describe the shift.
+SHIFT_COLUMN = "TIME_HABIT_SHIFT"
+E1_COLUMNS = COLUMNS[:5] + [SHIFT_COLUMN] + COLUMNS[5:]
+
+
+def columns_for(sheet: str) -> list[str]:
+    return E1_COLUMNS if sheet.startswith("e1_") else COLUMNS
+
+
+def allowed_for(columns: list[str]) -> dict:
+    return {**ALLOWED, SHIFT_COLUMN: ["YES", "NO"]} if SHIFT_COLUMN in columns else dict(ALLOWED)
 DIALECT_NAME = {"A": "AAVE", "C": "CollSgE", "I": "IndE"}
 CLASS_NAME = {"AfricanAmericanVernacular": "AAVE", "ColloquialSingaporeDialect": "CollSgE", "IndianDialect": "IndE"}
 
@@ -112,7 +126,7 @@ def pair_html(pair_id: str, dialect: str, sae: str, dia: str, question: str, gol
 
 # ---------------------------------------------------------------- spreadsheet
 
-def write_sheet(path: Path, rows: list[dict]) -> None:
+def write_sheet(path: Path, rows: list[dict], columns: list[str] | None = None) -> None:
     from openpyxl import Workbook
     from openpyxl.styles import Alignment, Font
     from openpyxl.worksheet.datavalidation import DataValidation
@@ -120,20 +134,27 @@ def write_sheet(path: Path, rows: list[dict]) -> None:
     wb = Workbook()
     ws = wb.active
     ws.title = path.stem
-    ws.append(COLUMNS)
+    columns = columns or COLUMNS
+    allowed = allowed_for(columns)
+    ws.append(columns)
     for c in ws[1]:
         c.font = Font(bold=True)
     for r in rows:
-        ws.append([r["pair_id"], DIALECT_NAME.get(r["dialect"], r["dialect"]), None, None, None, None])
+        ws.append([r["pair_id"], DIALECT_NAME.get(r["dialect"], r["dialect"])] + [None] * (len(columns) - 2))
     n = len(rows) + 1
-    for col, key in (("C", "CONTENT_PRESERVED"), ("D", "ANSWER_PRESERVED"), ("E", "FLUENCY")):
-        dv = DataValidation(type="list", formula1='"' + ",".join(ALLOWED[key]) + '"', allow_blank=True,
-                            showErrorMessage=True)
-        dv.add(f"{col}2:{col}{n}")
-        ws.add_data_validation(dv)
-    for col, w in zip("ABCDEF", (12, 12, 22, 22, 14, 60)):
-        ws.column_dimensions[col].width = w
-    for row in ws.iter_rows(min_row=2, min_col=6, max_col=6):
+    letters = "ABCDEFGH"
+    for i, key in enumerate(columns):
+        if key in allowed:
+            dv = DataValidation(type="list", formula1='"' + ",".join(allowed[key]) + '"', allow_blank=True,
+                                showErrorMessage=True)
+            dv.add(f"{letters[i]}2:{letters[i]}{n}")
+            ws.add_data_validation(dv)
+    widths = {"pair_id": 12, "dialect": 12, "CONTENT_PRESERVED": 22, "ANSWER_PRESERVED": 22, "FLUENCY": 14,
+              SHIFT_COLUMN: 20, "note": 60}
+    for i, key in enumerate(columns):
+        ws.column_dimensions[letters[i]].width = widths[key]
+    note_col = columns.index("note") + 1
+    for row in ws.iter_rows(min_row=2, min_col=note_col, max_col=note_col):
         row[0].alignment = Alignment(wrap_text=True)
     ws.freeze_panes = "A2"
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -158,30 +179,32 @@ def export(sheet: str, pairs: list[dict], outdir: Path, keysdir: Path, order_see
             pair_html(pid, name, p["sae"], p["dia"], p["question"], p["golds"]), encoding="utf-8")
         keys[pid] = {"item_key": p["item_key"], "dialect": p["dialect"],
                      "auto_answer_preserved": bool(answer_survives(p["golds"], p["dia"]))}
-    write_sheet(outdir / f"{sheet}.xlsx", rows)
+    write_sheet(outdir / f"{sheet}.xlsx", rows, columns_for(sheet))
     write_json(keysdir / f"{sheet}_keys.json", keys)
     return rows
 
 
 # ---------------------------------------------------------------- import
 
-def read_labels(xlsx: Path) -> list[dict]:
+def read_labels(xlsx: Path, columns: list[str] | None = None) -> list[dict]:
     from openpyxl import load_workbook
 
+    columns = columns or COLUMNS
     ws = load_workbook(xlsx, data_only=True).active
     header = [c.value for c in ws[1]]
-    if header[: len(COLUMNS)] != COLUMNS:
-        raise SystemExit(f"{xlsx}: header {header} does not match {COLUMNS}")
+    if header[: len(columns)] != columns:
+        raise SystemExit(f"{xlsx}: header {header} does not match {columns}")
     out = []
     for row in ws.iter_rows(min_row=2, values_only=True):
         if row[0] is None:
             continue
-        out.append({k: (str(v).strip() if v is not None else "") for k, v in zip(COLUMNS, row)})
+        out.append({k: (str(v).strip() if v is not None else "") for k, v in zip(columns, row)})
     return out
 
 
-def validate(labels: list[dict], keys: dict) -> list[str]:
+def validate(labels: list[dict], keys: dict, allowed: dict | None = None) -> list[str]:
     """All problems the import reports; an empty list means the sheet is accepted."""
+    allowed = allowed or ALLOWED
     errs = []
     ids = [r["pair_id"] for r in labels]
     missing = sorted(set(keys) - set(ids))
@@ -195,12 +218,14 @@ def validate(labels: list[dict], keys: dict) -> list[str]:
         errs.append(f"duplicate pair_id: {dup}")
     for r in labels:
         pid = r["pair_id"]
-        for col, allowed in ALLOWED.items():
+        for col, ok in allowed.items():
             v = r[col].upper()
             if v == "":
                 errs.append(f"{pid}: {col} is blank")
-            elif v not in allowed:
-                errs.append(f"{pid}: {col} = {r[col]!r} is not one of {allowed}")
+            elif v not in ok:
+                errs.append(f"{pid}: {col} = {r[col]!r} is not one of {ok}")
+        if r.get(SHIFT_COLUMN, "").upper() == "YES" and not r["note"]:
+            errs.append(f"{pid}: a note is required when {SHIFT_COLUMN} = YES (it names the shift)")
         if (r["CONTENT_PRESERVED"].upper() == "NO" or r["ANSWER_PRESERVED"].upper() == "NO"
                 or r["FLUENCY"].upper() == "SEVERE") and not r["note"]:
             errs.append(f"{pid}: a note is required for every NO and every SEVERE (guide D2)")
@@ -209,13 +234,15 @@ def validate(labels: list[dict], keys: dict) -> list[str]:
     return errs
 
 
-def import_labels(xlsx: Path, keys_file: Path) -> tuple[list[dict], list[str]]:
+def import_labels(xlsx: Path, keys_file: Path, columns: list[str] | None = None) -> tuple[list[dict], list[str]]:
+    columns = columns or COLUMNS
+    allowed = allowed_for(columns)
     keys = read_json(keys_file)
-    labels = read_labels(xlsx)
-    errs = validate(labels, keys)
+    labels = read_labels(xlsx, columns)
+    errs = validate(labels, keys, allowed)
     merged = []
     if not errs:
         for r in labels:
             k = keys[r["pair_id"]]
-            merged.append({**r, **{c: r[c].upper() for c in ALLOWED}, **k})
+            merged.append({**r, **{c: r[c].upper() for c in allowed}, **k})
     return merged, errs

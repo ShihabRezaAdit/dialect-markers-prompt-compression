@@ -1,7 +1,7 @@
 """LLMLingua window (decisions log): iterative_size = min(200, Llama-2 tokens of the text being
 compressed), passed to L1 and LL and recorded; keep rates are reported by text length."""
 from idea86 import compress as K
-from idea86.pilot import keep_by_length
+from idea86.summaries import keep_by_length
 
 
 class FakeLlama:
@@ -44,8 +44,8 @@ def test_record_keeps_window_and_length_and_report_groups():
     rec = K.record(job, {"compressed_prompt": "a c", "iterative_size": 4}, 0.1)
     assert rec["iterative_size"] == 4 and rec["n_words"] == 4 and rec["achieved_keep_rate"] == 0.5
     kb = keep_by_length({"x": rec, "y": {**rec, "n_words": 160, "iterative_size": 200, "achieved_keep_rate": 0.4}})
-    assert kb["L1, words 1-49"]["mean"] == 0.5 and kb["L1, words 150+"]["mean"] == 0.4
-    assert kb["L1, window <200 (= text length)"]["n"] == 1 and kb["L1, window 200"]["n"] == 1
+    assert kb["L1 at 0.5, words 1-49"]["mean"] == 0.5 and kb["L1 at 0.5, words 150+"]["mean"] == 0.4
+    assert kb["L1 at 0.5, window <200 (= text length)"]["n"] == 1 and kb["L1 at 0.5, window 200"]["n"] == 1
 
 
 def test_legacy_cache_shim_converts_lists_only():

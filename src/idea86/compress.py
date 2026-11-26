@@ -6,7 +6,7 @@ L1, L2 and LL run in env-compress (llmlingua==0.2.2); SC runs in env-sc
 (selective-context==0.1.4). R needs no model and runs in env-stats. Imports are lazy
 so each environment only needs its own package.
 
-Run as a GPU job: ./run_pilot.sh compress submits one job per compressor.
+Run as GPU jobs: ./run_main.sh compress submits the sharded jobs per compressor.
 """
 from __future__ import annotations
 
@@ -186,7 +186,7 @@ def record(job: dict, res: dict, secs: float) -> dict:
 
 
 def run_jobs(jobs: list[dict], compressor: str, cfg) -> list[dict]:
-    rho_default = cfg["compress"]["rho"]
+    rho_default = cfg["compress"].get("rho", cfg["compress"].get("confirmatory_rate"))
     out = []
     if compressor in ("L1", "L2", "LL"):
         fam = LLMLinguaFamily(_path(cfg, "llama2") if compressor in ("L1", "LL") else None,

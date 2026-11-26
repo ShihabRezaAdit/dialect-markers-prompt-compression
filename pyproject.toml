@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "idea86"
 version = "0.1.0"
-description = "Does prompt compression remove dialect markers? Pilot study P0"
+description = "Does prompt compression remove dialect markers? Main study (pilot archived at tag pilot-final)"
 requires-python = ">=3.10"
 dependencies = ["pyyaml", "numpy"]
 

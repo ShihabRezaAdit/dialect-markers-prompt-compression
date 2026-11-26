@@ -4,7 +4,7 @@ One GPU per job; one model per job. Prompts are deduplicated by their text, so t
 Arm B prompt with the SAE question and no compression is served from the Arm A S-U
 generation, as the plan states.
 
-Run as a GPU job: ./run_pilot.sh generate submits one job per model.
+Run as a GPU job (should-have tier E3; not yet wired into run_main.sh).
 """
 from __future__ import annotations
 
