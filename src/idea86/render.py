@@ -40,11 +40,42 @@ def _offline_patches() -> None:
         stanza.Pipeline = patched
 
 
-def make_dialect(class_name: str, morphosyntax: bool = True):
+def disable_features(dialect, names) -> list[str]:
+    """Remove the listed features from the dialect's morphosyntax_transforms (value-nlp 0.3
+    convert_sae_to_dialect applies only the features listed there). An unknown name stops the
+    run (decisions log: meaning-preserving feature subset). Returns the removed names."""
+    names = list(names or [])
+    have = dict(dialect.morphosyntax_transforms)
+    unknown = sorted(set(names) - set(have))
+    if unknown:
+        raise SystemExit(f"{type(dialect).__name__}: disabled features not in morphosyntax_transforms: "
+                         f"{', '.join(unknown)}")
+    off = set(names)
+    dialect.morphosyntax_transforms = {f: v for f, v in have.items() if f not in off}
+    if off:
+        # A feature that stays on can call a disabled feature's method (e.g. null_relcl_that ->
+        # null_relcl), which writes rules under the disabled name; value-nlp 0.3 applies rules
+        # whose name is not in morphosyntax_transforms with probability 1.0. Drop those rules.
+        orig = dialect.decide_filter_rules
+
+        def decide_filter_rules():
+            return {name: r for name, r in orig().items() if name not in off}
+
+        dialect.decide_filter_rules = decide_filter_rules
+    return sorted(off)
+
+
+def make_dialect(class_name: str, morphosyntax: bool = True, disabled=None):
     _offline_patches()
     from multivalue import Dialects  # env-render only
 
-    return getattr(Dialects, class_name)(morphosyntax=morphosyntax)
+    d = getattr(Dialects, class_name)(morphosyntax=morphosyntax)
+    disable_features(d, disabled)
+    return d
+
+
+def disabled_for(cfg: dict, class_name: str) -> list[str]:
+    return list((cfg["render"].get("disabled_features") or {}).get(class_name) or [])
 
 
 def warmup(cfg) -> None:
@@ -60,9 +91,11 @@ def warmup(cfg) -> None:
         nltk.download(pkg, download_dir=nltk_dir, quiet=True)
     stanza.download("en", processors="tokenize,mwt,pos,lemma,depparse,coref", verbose=False)
     for code, cls in cfg["render"]["dialects"].items():
-        d = make_dialect(cls, cfg["render"]["morphosyntax"])
+        off = disabled_for(cfg, cls)
+        d = make_dialect(cls, cfg["render"]["morphosyntax"], off)
         r = render_one(d, "She is always studying at the library because they were not there.", 0)
-        print(f"[warmup] render {code} ({cls}): ok={r['ok']} -> {r.get('text', r.get('error'))}")
+        print(f"[warmup] render {code} ({cls}): {len(d.morphosyntax_transforms)} features on, "
+              f"{len(off)} off; ok={r['ok']} -> {r.get('text', r.get('error'))}")
 
 
 def rule_log(executed_rules: dict) -> list[dict]:
@@ -225,22 +258,117 @@ def build_jobs(items: dict, cfg: dict) -> list[dict]:
     return jobs
 
 
-def run_shard(jobs: list[dict], task: int, ntasks: int, morphosyntax: bool = True) -> list[dict]:
-    """Contiguous block of jobs for this task; one dialect object per class per worker.
-    Questions are rendered whole; passages (and stories) use render_passage, which falls back
-    to sentence-by-sentence rendering when the whole text fails."""
+QUOTE_RE = None
+
+
+def quote_spans(text: str) -> list[tuple[int, int]]:
+    """Character spans of quoted text, quotation marks included: straight double quotes on one
+    line ("...") and curly double quotes (\u201c...\u201d). An unpaired mark is not a quote."""
+    import re
+
+    global QUOTE_RE
+    if QUOTE_RE is None:
+        QUOTE_RE = re.compile('"[^"\n]*"|\u201c[^\u201c\u201d]*\u201d')
+    return [m.span() for m in QUOTE_RE.finditer(text)]
+
+
+METHOD_RANK = {"whole": 0, "sentence_fallback": 1, "no_coref": 2, "failed": 3}
+
+
+def render_protected(dialect, text: str, k: int, render_fn) -> dict:
+    """Quotation protection (decisions log): text inside quotation marks is copied unchanged.
+    The text is split at the quote spans; each outside part that contains a letter is rendered
+    with render_fn(dialect, core, k), where core is the part without its leading and trailing
+    whitespace, and the parts are rejoined exactly in order. Rule spans are shifted to offsets
+    in the full text. Without quotes this is render_fn(dialect, text, k) unchanged.
+    The method is the worst of the parts (whole < sentence_fallback < no_coref < failed); if a
+    part fails, the text is recorded as failed."""
+    qs = quote_spans(text)
+    if not qs:
+        return render_fn(dialect, text, k)
+    parts, prev = [], 0
+    for s, e in qs:
+        parts.append((prev, s, False))
+        parts.append((s, e, True))
+        prev = e
+    parts.append((prev, len(text), False))
+    outs, rules, counter, method, secs, extra = [], [], {}, "whole", 0.0, {}
+    for s, e, quoted in parts:
+        seg = text[s:e]
+        core = seg.strip()
+        if quoted or not any(ch.isalpha() for ch in core):
+            outs.append(seg)
+            continue
+        lead = len(seg) - len(seg.lstrip())
+        r = render_fn(dialect, core, k)
+        m = r.get("method", "whole" if r["ok"] else "failed")
+        if METHOD_RANK[m] > METHOD_RANK[method]:
+            method = m
+        if not r["ok"]:
+            return {"ok": False, "error": r.get("error"), "attempts": r.get("attempts", 2), "method": "failed",
+                    "quote_protected": True, "n_quotes": len(qs)}
+        outs.append(seg[:lead] + r["text"] + seg[lead + len(core):])
+        off = s + lead
+        rules += [{**x, "start": x["start"] + off, "end_incl": x["end_incl"] + off} for x in r["rules"]]
+        for a, b in r["counter"].items():
+            counter[a] = counter.get(a, 0) + int(b)
+        secs += r.get("seconds", 0.0)
+        for key in ("no_coref_sentences", "coref_dependent_features"):
+            if key in r:
+                extra[key] = r[key]
+    return {"ok": True, "text": "".join(outs), "rules": rules, "counter": counter, "seconds": secs,
+            "attempts": 1, "method": method, "quote_protected": True, "n_quotes": len(qs), **extra}
+
+
+def n_words(text: str) -> int:
+    return len(text.split())
+
+
+def length_check(res: dict, sae: str, max_ratio) -> dict:
+    """Length check (decisions log): a rendering with more than max_ratio x the SAE text's
+    whitespace-separated words is excluded (ok False, method "too_long") and counted. The
+    rendered text is kept in `too_long_text` for the report."""
+    if not max_ratio or not res.get("ok"):
+        return res
+    ratio = n_words(res["text"]) / max(1, n_words(sae))
+    if ratio <= float(max_ratio):
+        return {**res, "length_ratio": ratio}
+    return {"ok": False, "method": "too_long", "error": f"rendering is {ratio:.2f} x the SAE length",
+            "length_ratio": ratio, "too_long_text": res["text"], "rendered_method": res.get("method"),
+            "rules": res.get("rules", []), "attempts": res.get("attempts", 1)}
+
+
+def _question_fn(dialect, text, k):
+    r = render_one(dialect, text, k)
+    return {**r, "method": "whole" if r["ok"] else "failed"}
+
+
+def render_job(dialect, job: dict, rcfg: dict | None = None) -> dict:
+    """One job: questions are rendered whole, passages with render_passage; then quotation
+    protection (render.protect_quotes) and the length check (render.max_length_ratio)."""
+    rcfg = rcfg or {}
+    fn = _question_fn if job["kind"] == "question" else render_passage
+    if rcfg.get("protect_quotes"):
+        res = render_protected(dialect, job["text"], job["k"], fn)
+    else:
+        res = fn(dialect, job["text"], job["k"])
+    return length_check(res, job["text"], rcfg.get("max_length_ratio"))
+
+
+def run_shard(jobs: list[dict], task: int, ntasks: int, rcfg: dict | bool | None = None) -> list[dict]:
+    """Contiguous block of jobs for this task; one dialect object per class per worker, with
+    the configured features switched off (render.disabled_features). `rcfg` is the config's
+    render section (a bare bool is read as morphosyntax, for old callers)."""
+    if isinstance(rcfg, bool) or rcfg is None:
+        rcfg = {"morphosyntax": True if rcfg is None else rcfg}
     n = len(jobs)
     lo, hi = task * n // ntasks, (task + 1) * n // ntasks
     objs: dict[str, object] = {}
     out = []
     for j in jobs[lo:hi]:
         if j["dialect_class"] not in objs:
-            objs[j["dialect_class"]] = make_dialect(j["dialect_class"], morphosyntax)
-        d = objs[j["dialect_class"]]
-        if j["kind"] == "question":
-            res = {**render_one(d, j["text"], j["k"])}
-            res["method"] = "whole" if res["ok"] else "failed"
-        else:
-            res = render_passage(d, j["text"], j["k"])
+            off = (rcfg.get("disabled_features") or {}).get(j["dialect_class"]) or []
+            objs[j["dialect_class"]] = make_dialect(j["dialect_class"], rcfg.get("morphosyntax", True), off)
+        res = render_job(objs[j["dialect_class"]], j, rcfg)
         out.append({k: j[k] for k in ("job_id", "kind", "pos", "k", "dialect")} | res)
     return out

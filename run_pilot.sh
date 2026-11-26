@@ -11,7 +11,7 @@
 #   smoke-items    write the smoke-run items (10 paragraphs, 20 questions, 10 tweets)
 #   render         write render jobs and submit the rendering array      [--smoke] [--g1]
 #   render-collect merge the rendering shards                              [--smoke]
-#   audit-export   export an audit sheet (--sheet warmup_audit with --smoke; --sheet p0_audit)
+#   audit-export   export an audit sheet (--sheet warmup_audit with --smoke; --sheet p0_audit or p0_audit2)
 #   compress       write compression jobs and submit L1, L2, LL, SC       [--smoke] [--g1]
 #   prompts        random control R, then the generation prompts           [--smoke]
 #   generate       submit generation for M1 and M2                         [--smoke] [--g1]
@@ -88,7 +88,7 @@ case "$step" in
             fi
             echo "submitted rendering array $j; when all tasks finish: ./run_pilot.sh render-collect ${FLAGS[*]}" ;;
   render-collect) ( act stats; ix render-collect "${FLAGS[@]}" ) ;;
-  audit-export) [ -n "$SHEET" ] || { echo "--sheet warmup_audit|p0_audit is required"; exit 1; }
+  audit-export) [ -n "$SHEET" ] || { echo "--sheet warmup_audit|p0_audit|p0_audit2 is required"; exit 1; }
             ( act stats; ix audit-export --sheet "$SHEET" "${FLAGS[@]}" ) ;;
   compress) [ $G1 = 1 ] || ( act stats; ix compress-jobs "${FLAGS[@]}" )
             G=(); [ $G1 = 1 ] && G=(--g1)

@@ -35,6 +35,7 @@ def _status(run) -> None:
     checks += [("generate/prompts.jsonl", r / "generate" / "prompts.jsonl")]
     checks += [(f"generate/{m}.jsonl", r / "generate" / f"{m}.jsonl") for m in cfg["generate"]["models"]]
     checks += [("audit/labels_p0.jsonl", r / "audit" / "labels_p0.jsonl"),
+               ("audit/labels_p0_audit2.jsonl", r / "audit" / "labels_p0_audit2.jsonl"),
                ("results/signals.json", r / "results" / "signals.json"),
                ("report/P0_report.md", r / "report" / "P0_report.md")]
     for name, p in checks:
@@ -55,7 +56,7 @@ def main(argv=None) -> None:
     ap.add_argument("--ntasks", type=int, help="render: number of array tasks (default from config)")
     ap.add_argument("--compressor", choices=["L1", "L2", "LL", "SC"])
     ap.add_argument("--model", help="generate: model key (M1 or M2)")
-    ap.add_argument("--sheet", choices=["warmup_audit", "p0_audit"])
+    ap.add_argument("--sheet", choices=["warmup_audit", "p0_audit", "p0_audit2"])
     ap.add_argument("--force", action="store_true", help="precommit: overwrite (must be logged)")
     a = ap.parse_args(argv)
     cfg = C.load(a.config)
@@ -105,7 +106,7 @@ def main(argv=None) -> None:
         ntasks = a.ntasks or cfg["render"]["array_tasks"]
         src = run.p("g1", "render_jobs.jsonl") if a.g1 else run.p("render", "jobs.jsonl")
         out = run.p("g1", "render_shards") if a.g1 else run.p("render", "shards")
-        rows = run_shard(C.read_jsonl(src), task, ntasks, cfg["render"]["morphosyntax"])
+        rows = run_shard(C.read_jsonl(src), task, ntasks, cfg["render"])
         C.write_jsonl(out / f"shard_{task:03d}.jsonl", rows)
         print(f"[render] task {task}/{ntasks}: {len(rows)} texts, {sum(not r['ok'] for r in rows)} failed")
     elif a.command == "render-collect":

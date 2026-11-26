@@ -15,7 +15,7 @@ from . import data as D
 from . import metrics as M
 from . import stats as S
 from . import survival as sv
-from .audit import export as audit_export
+from .audit import dialect_names, export as audit_export
 from .config import load, provenance, read_json, read_jsonl, sha256_file, sha256_text, write_json, write_jsonl
 from .generate import squad_prompt
 from .render import build_jobs
@@ -157,11 +157,48 @@ def step_render_collect(run: Run) -> None:
     print(f"rendered {len(rendered)}; failed {len(fails)}")
     for key, v in summ.items():
         print(f"  {key}: {v['n']} texts, whole {v['whole']}, sentence fallback {v['sentence_fallback']}, "
-              f"no-coref {v['no_coref']} ({v['no_coref_sentences']} sentences), failed {v['failed']} "
-              f"(failure rate {v['failure_rate']:.3f})")
+              f"no-coref {v['no_coref']} ({v['no_coref_sentences']} sentences), too long {v['too_long']}, "
+              f"failed {v['failed']} (not usable {v['failure_rate']:.3f}); quote-protected {v['quote_protected']}")
         if v["coref_dependent_features"]:
             print(f"    features that read coreference (not applied in no-coref sentences): "
                   f"{', '.join(v['coref_dependent_features'])}")
+    mk = marker_summary(run.items(), rendered, run.cfg)
+    write_json(run.p("render", "markers.json"), mk)
+    for d, v in mk.items():
+        print(f"  markers {d} ({v['dialect_class']}): {v['passages']} passages, rule-log entries per passage "
+              f"mean {v['mean']:.1f}, median {v['median']:.0f}; passages with >= 1 / >= 3: "
+              f"{v['share_ge1']:.2f} / {v['share_ge3']:.2f}; {v['features_off']} features off, "
+              f"{len(v['types'])} fired")
+        print("    fired: " + ", ".join(f"{t} {n}" for t, n in v["types"].items()))
+    bad = {d: v["disabled_fired"] for d, v in mk.items() if v["disabled_fired"]}
+    if bad:
+        raise SystemExit(f"switched-off features appear in the rule logs: {bad}")
+
+
+def marker_summary(items: dict, rendered: dict, cfg) -> dict:
+    """Per dialect, over the usable pilot passages: rule-log entries (markers) per passage, the
+    share of passages with at least 1 and at least 3, and every rule type that fired with its
+    entry count. `disabled_fired` lists switched-off features found in the logs (must be empty)."""
+    out = {}
+    for d in DIALECTS:
+        cls = cfg["render"]["dialects"][d]
+        off = set((cfg["render"].get("disabled_features") or {}).get(cls) or [])
+        n, types = [], {}
+        for pz in items["passages"]:
+            r = rendered.get(f"passage:{pz['pos']}:{d}")
+            if not r or not r.get("ok"):
+                continue
+            rules = r.get("rules") or []
+            n.append(len(rules))
+            for x in rules:
+                types[x["type"]] = types.get(x["type"], 0) + 1
+        a = np.array(n) if n else np.zeros(1)
+        out[d] = {"dialect_class": cls, "passages": len(n), "mean": float(a.mean()), "median": float(np.median(a)),
+                  "share_ge1": float((a >= 1).mean()), "share_ge3": float((a >= 3).mean()),
+                  "entries": int(a.sum()), "features_off": len(off),
+                  "types": dict(sorted(types.items(), key=lambda kv: (-kv[1], kv[0]))),
+                  "disabled_fired": sorted(set(types) & off)}
+    return out
 
 
 def rendering_summary(rendered: dict) -> dict:
@@ -172,16 +209,19 @@ def rendering_summary(rendered: dict) -> dict:
     out: dict = {}
     for r in rendered.values():
         key = f"{r['kind']}_{r['dialect']}"
-        v = out.setdefault(key, {"n": 0, "whole": 0, "sentence_fallback": 0, "no_coref": 0, "failed": 0,
-                                 "no_coref_sentences": 0, "coref_dependent_features": []})
+        v = out.setdefault(key, {"n": 0, "whole": 0, "sentence_fallback": 0, "no_coref": 0, "too_long": 0,
+                                 "failed": 0, "no_coref_sentences": 0, "quote_protected": 0,
+                                 "coref_dependent_features": []})
         v["n"] += 1
         m = r.get("method") or ("whole" if r.get("ok") else "failed")
-        v[m if m in ("whole", "sentence_fallback", "no_coref", "failed") else ("whole" if r.get("ok") else "failed")] += 1
+        v[m if m in ("whole", "sentence_fallback", "no_coref", "too_long", "failed") else ("whole" if r.get("ok") else "failed")] += 1
+        v["quote_protected"] += int(bool(r.get("quote_protected")))
         v["no_coref_sentences"] += len(r.get("no_coref_sentences") or [])
         v["coref_dependent_features"] = sorted(set(v["coref_dependent_features"]) | set(r.get("coref_dependent_features") or []))
     for v in out.values():
         n = v["n"] or 1
-        v["failure_rate"] = v["failed"] / n
+        v["failure_rate"] = (v["failed"] + v["too_long"]) / n   # texts not usable (failed or too long)
+        v["too_long_share"] = v["too_long"] / n
         v["fallback_share"] = v["sentence_fallback"] / n
         v["no_coref_share"] = v["no_coref"] / n
     return dict(sorted(out.items()))
@@ -189,10 +229,65 @@ def rendering_summary(rendered: dict) -> dict:
 
 # ---------------------------------------------------------------- step: audit export
 
+def audit_round2_pairs(items: dict, rendered: dict, per_dialect: int, q_per_par: int = 2) -> dict:
+    """Round-2 audit pairs (decisions log): a fresh default_rng(86) permutation of the pilot
+    paragraphs not audited in round 1 (items["audit_pairs"]), with one of the two questions per
+    position drawn from the same generator. Walking the permutation, paragraphs go to A until
+    `per_dialect` usable renderings (rendered and not too long), then to C until `per_dialect`;
+    a paragraph whose rendering in the dialect being filled is not usable is skipped and listed."""
+    done = {a["ppos"] for a in items["audit_pairs"]}
+    pool = [p["pos"] for p in items["passages"] if p["pos"] not in done]
+    rng = np.random.default_rng(86)
+    perm = rng.permutation(len(pool))
+    qpick = rng.integers(0, q_per_par, size=len(pool))
+    pairs, skipped, i = [], [], 0
+    for d in DIALECTS:
+        got = 0
+        while got < per_dialect:
+            if i >= len(perm):
+                raise SystemExit(f"round-2 audit: not enough usable paragraphs for {d}")
+            ppos = pool[int(perm[i])]
+            r = rendered.get(f"passage:{ppos}:{d}")
+            if r and r.get("ok"):
+                pairs.append({"ppos": ppos, "dialect": d, "qpos": ppos * q_per_par + int(qpick[i])})
+                got += 1
+            else:
+                skipped.append({"ppos": ppos, "dialect": d, "method": (r or {}).get("method")})
+            i += 1
+    return {"pairs": pairs, "skipped": skipped}
+
+
+def audit_pairs(run: Run, items: dict, rendered: dict) -> list[dict]:
+    """The audit pairs that G3 and G5 use: round 2 when sample.audit_round is 2 (pilot run),
+    else round 1 (and always in the smoke run, which has no round 2)."""
+    if run.cfg["sample"].get("audit_round", 1) == 2 and not run.smoke:
+        return audit_round2_pairs(items, rendered, run.cfg["sample"]["audit_pairs_per_dialect"],
+                                  run.cfg["sample"]["questions_per_paragraph"])["pairs"]
+    return items["audit_pairs"]
+
+
+def labels_path(run: Run) -> Path:
+    return run.p("audit", "labels_p0_audit2.jsonl" if run.cfg["sample"].get("audit_round", 1) == 2
+                 and not run.smoke else "labels_p0.jsonl")
+
+
 def step_audit_export(run: Run, sheet: str) -> None:
     items, rendered = run.items(), run.rendered()
     pairs = []
-    if sheet == "p0_audit":
+    if sheet == "p0_audit2":
+        if run.cfg["sample"].get("audit_round", 1) != 2 or run.smoke:
+            raise SystemExit("p0_audit2 needs sample.audit_round: 2 and the pilot run (not --smoke)")
+        a2 = audit_round2_pairs(items, rendered, run.cfg["sample"]["audit_pairs_per_dialect"],
+                                run.cfg["sample"]["questions_per_paragraph"])
+        write_json(run.p("audit", "round2_pairs.json"), a2)
+        for a in a2["pairs"]:
+            q = items["questions"][a["qpos"]]
+            pairs.append({"item_key": f"passage:{a['ppos']}:{a['dialect']}", "dialect": a["dialect"],
+                          "sae": items["passages"][a["ppos"]]["context"],
+                          "dia": passage_text(items, rendered, a["ppos"], a["dialect"]),
+                          "question": q["question"], "golds": q["answers"]})
+        print(f"round 2: {len(a2['pairs'])} pairs; skipped (not usable): {len(a2['skipped'])}")
+    elif sheet == "p0_audit":
         for a in items["audit_pairs"]:
             q = items["questions"][a["qpos"]]
             dia = passage_text(items, rendered, a["ppos"], a["dialect"])
@@ -215,8 +310,9 @@ def step_audit_export(run: Run, sheet: str) -> None:
                               "sae": items["passages"][ppos]["context"], "dia": dia,
                               "question": q["question"], "golds": q["answers"]})
     else:
-        raise SystemExit("P0 sheets: warmup_audit (smoke run), p0_audit")
-    audit_export(sheet, pairs, run.p("audit", "export", sheet), run.p("audit", "keys"))
+        raise SystemExit("P0 sheets: warmup_audit (smoke run), p0_audit, p0_audit2")
+    audit_export(sheet, pairs, run.p("audit", "export", sheet), run.p("audit", "keys"),
+                 names=dialect_names(run.cfg))
     print(f"exported {len(pairs)} pairs -> {run.p('audit', 'export', sheet)}")
 
 
@@ -598,7 +694,7 @@ def gates(run: Run, res: dict) -> dict:
     out["G2"] = g2 | {"pass": all(v["pass"] for v in g2.values())}
     # G3: rule-log spans covered by diff ops in the 100 audited paragraphs
     cov = tot = 0
-    for a in items["audit_pairs"]:
+    for a in audit_pairs(run, items, rendered):
         r = rendered.get(f"passage:{a['ppos']}:{a['dialect']}")
         if not r or not r["ok"]:
             continue
@@ -612,9 +708,14 @@ def gates(run: Run, res: dict) -> dict:
     # G4: Delta_s under R pooled over A and C
     pooled = (list(res["retention"]["R_A"]["values"].values()) + list(res["retention"]["R_C"]["values"].values()))
     g4 = float(np.mean(pooled)) if pooled else float("nan")
-    out["G4"] = {"delta_s": g4, "units": len(pooled), "pass": abs(g4) <= g["g4_max_abs"]}
+    by_d = {d: float(np.mean(list(res["retention"][f"R_{d}"]["values"].values())))
+            if res["retention"][f"R_{d}"]["values"] else float("nan") for d in DIALECTS}
+    out["G4"] = {"delta_s": g4, "units": len(pooled), "pass": abs(g4) <= g["g4_max_abs"],
+                 "by_dialect": by_d,
+                 # report flag (not part of the gate): control not near zero in a dialect
+                 "flag_by_dialect": {d: not (abs(v) <= g["g4_max_abs"]) for d, v in by_d.items()}}
     # G5: audit labels and automatic answer preservation
-    lab = run.p("audit", "labels_p0.jsonl")
+    lab = labels_path(run)
     g5 = {"answer_preserved_share": res["answer_preserved_share"]}
     if lab.exists():
         L = read_jsonl(lab)
@@ -627,7 +728,7 @@ def gates(run: Run, res: dict) -> dict:
         g5["pass"] = all(g5["pass_by_dialect"].values())
     else:
         g5["pass"] = None
-        g5["note"] = "labels_p0.jsonl not imported yet"
+        g5["note"] = f"{lab.name} not imported yet"
     out["G5"] = g5
     return out
 
@@ -704,6 +805,31 @@ def projection(run: Run, res: dict, sig: dict, acc: dict) -> dict:
     return out
 
 
+def control_adjusted(run: Run, res: dict) -> dict:
+    """Per learned compressor and dialect: Delta_s(compressor) - Delta_s(R) per paragraph (the
+    paragraphs that have both), mean with a 95% cluster-bootstrap interval. Descriptive (pilot
+    report); not a signal and not a gate."""
+    B = run.cfg["stats"]["bootstrap_resamples"]
+    out = {}
+    for c in LEARNED_S1:
+        for d in DIALECTS:
+            a, r = res["retention"][f"{c}_{d}"]["values"], res["retention"][f"R_{d}"]["values"]
+            keys = sorted(set(a) & set(r), key=str)
+            if not keys:
+                out[f"{c}_{d}"] = {"estimate": None, "ci95": [None, None], "n_paragraphs": 0}
+                continue
+            v = np.array([a[k] - r[k] for k in keys], dtype=float)
+            est, draws = S.bootstrap(S.mean_stat(v), len(v), B)
+            out[f"{c}_{d}"] = {"estimate": est, "ci95": list(S.percentile_ci(draws, 0.95)), "n_paragraphs": len(v)}
+    return out
+
+
+def round1_gates(run: Run):
+    """The original (round-1) gate results, kept in the report (decisions log)."""
+    f = run.root.parent / "P0_round1" / "results" / "gates.json"
+    return read_json(f) if (not run.smoke and f.exists()) else None
+
+
 def write_report(run: Run, res, sig, gts, acc, proj, nf=None) -> None:
     L = ["# P0 pilot report", "",
          f"Config SHA-256: `{run.cfg_hash}`. Preliminary results; not confirmatory.", "",
@@ -717,13 +843,47 @@ def write_report(run: Run, res, sig, gts, acc, proj, nf=None) -> None:
     L += ["", "## S2 answer survival (97.5% intervals)", "", "| Dialect | Delta_a | Interval | Discordance | n | Met |", "|---|---|---|---|---|---|"]
     for k, v in sig["S2"].items():
         L.append(f"| {k} | {v['estimate']:.4f} | [{v['ci'][0]:.4f}, {v['ci'][1]:.4f}] | {v['discordance']:.3f} | {v['n_questions']} | {v['met']} |")
+    r1 = round1_gates(run)
+    if r1:
+        L += ["", "## Original gate results (round 1: ColloquialSingaporeDialect, all Multi-VALUE features)", "",
+              "Kept as run (decisions log); G3 and G5 failed there and were re-checked on the new rendering "
+              "with the same measures and thresholds.", ""]
+        for k in ("G1", "G2", "G3", "G4", "G5"):
+            if k in r1:
+                L.append(f"- **{k}** (round 1): pass = {r1[k].get('pass')}  \n  "
+                         f"`{json.dumps({x: y for x, y in r1[k].items() if x != 'pass'}, default=str)[:900]}`")
+    ca = control_adjusted(run, res)
+    L += ["", "## Compressor minus random control (descriptive; 95% intervals; not a signal)", "",
+          "| Cell | Delta_s(c) - Delta_s(R) | 95% interval | n |", "|---|---|---|---|"]
+    for k, v in ca.items():
+        if v["estimate"] is None:
+            L.append(f"| {k} | - | - | 0 |")
+        else:
+            L.append(f"| {k} | {v['estimate']:.4f} | [{v['ci95'][0]:.4f}, {v['ci95'][1]:.4f}] | {v['n_paragraphs']} |")
+    L.append("")
+    for d, v in gts["G4"].get("by_dialect", {}).items():
+        flag = gts["G4"]["flag_by_dialect"][d]
+        L.append(f"- Random control in {d}: Delta_s(R) = {v:.4f}" +
+                 (f" -- **flag: not near zero (|value| > {run.cfg['gates']['g4_max_abs']})**" if flag else " (near zero)"))
     summ = rendering_summary(read_json(run.p("render", "rendered.json")))
-    L += ["", "## Rendering: whole, sentence fallback, no-coreference sentences, failures", "",
-          "| Texts | n | Whole | Sentence fallback | No-coref passages | No-coref sentences | Failed | Failure rate |",
-          "|---|---|---|---|---|---|---|---|"]
+    L += ["", "## Rendering: whole, sentence fallback, no-coreference sentences, too long, failures", "",
+          "| Texts | n | Whole | Sentence fallback | No-coref passages | No-coref sentences | Too long (> max ratio) | Failed | Not usable | Quote-protected |",
+          "|---|---|---|---|---|---|---|---|---|---|"]
     for k, v in summ.items():
         L.append(f"| {k} | {v['n']} | {v['whole']} | {v['sentence_fallback']} | {v['no_coref']} | "
-                 f"{v['no_coref_sentences']} | {v['failed']} | {v['failure_rate']:.3f} |")
+                 f"{v['no_coref_sentences']} | {v.get('too_long', 0)} | {v['failed']} | {v['failure_rate']:.3f} | "
+                 f"{v.get('quote_protected', 0)} |")
+    L.append("")
+    mk = marker_summary(run.items(), read_json(run.p("render", "rendered.json")), run.cfg)
+    L += ["## Dialect markers per pilot passage (rule-log entries) and features that fired", "",
+          "| Dialect | Class | Passages | Mean | Median | >= 1 | >= 3 | Features off | Types fired |",
+          "|---|---|---|---|---|---|---|---|---|"]
+    for d, v in mk.items():
+        L.append(f"| {d} | {v['dialect_class']} | {v['passages']} | {v['mean']:.1f} | {v['median']:.0f} | "
+                 f"{v['share_ge1']:.2f} | {v['share_ge3']:.2f} | {v['features_off']} | {len(v['types'])} |")
+    L.append("")
+    for d, v in mk.items():
+        L.append(f"- {d} fired: " + ", ".join(f"{t} {n}" for t, n in v["types"].items()))
     L.append("")
     for k, v in summ.items():
         if v["coref_dependent_features"]:
@@ -785,6 +945,7 @@ def step_analyze(run: Run) -> None:
     write_json(run.p("results", "gates.json"), gts)
     write_json(run.p("results", "accuracy.json"), acc)
     write_json(run.p("results", "projection.json"), proj)
+    write_json(run.p("results", "control_adjusted.json"), control_adjusted(run, res))
     # Sensitivity analyses: the same measures without no-coref passages, and without any
     # passage rendered by a fallback (sentence fallback or no-coref)
     nf = {}

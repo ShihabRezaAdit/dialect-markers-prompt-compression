@@ -39,6 +39,8 @@ sample:
   real_aae_study_rows: [201, 2200]    # reserved; never opened in P0
   ud_fallback_pilot_per_file: 50
   audit_pairs_per_dialect: 50
+  audit_round: 2                      # round 2: 50 fresh pairs per dialect on the new rendering (decisions log);
+                                      # G3 and G5 use them; round 1 (items.json audit_pairs) stays in the report
   smoke_paragraphs: 10                # shuffle positions 300 to 309; not pilot items
   warmup_pairs: 5                     # annotation guide D4; labels discarded
 
@@ -46,9 +48,24 @@ render:
   package: value-nlp==0.3
   dialects:
     A: AfricanAmericanVernacular
-    C: ColloquialSingaporeDialect
-  fallback_dialect: IndianDialect     # G5 only
+    C: IndianDialect                  # replaces ColloquialSingaporeDialect (pre-set G5 action; decisions log)
+  fallback_dialect: IndianDialect     # G5 only (now in use as C)
   morphosyntax: true
+  # Meaning-preserving feature subset (decisions log; criteria A, B refined, C in
+  # P0_results/pilot/feature_decision.md). Removed from morphosyntax_transforms; the run stops if
+  # a listed feature does not exist in the dialect.
+  disabled_features:
+    AfricanAmericanVernacular: [clefting, negative_inversion, inverted_indirect_question,
+      superlative_before_matrix_head, double_modals, present_modals, will_would, if_would,
+      no_gender_distinction, em_subj_pronoun, she_inanimate_objects, mass_noun_plurals,
+      plural_to_singular_human, corr_conjunction_doubling, zero_degree, null_relcl,
+      possessives_for_pre, aint_be]
+    IndianDialect: [inverted_indirect_question, fronting_pobj, double_obj_order, reduced_relative,
+      present_modals, will_would, if_would, no_gender_distinction, mass_noun_plurals,
+      plural_to_singular_human, corr_conjunction_doubling, zero_degree, null_prepositions,
+      null_relcl, drop_copula_be_locative]
+  protect_quotes: true                # text inside quotation marks is copied unchanged
+  max_length_ratio: 1.3               # rendering > 1.3 x SAE words: excluded and counted (too_long)
   array_tasks: 64
   cpus_per_task: 4
   k_offsets:                          # set_seed(86 + k)

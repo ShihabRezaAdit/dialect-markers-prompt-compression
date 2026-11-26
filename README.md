@@ -150,3 +150,18 @@ Decided during pilot preparation (smoke run; decisions log, internal plan):
     without it). The run stops if vLLM lacks the setting. Fallback, fixed in the plan: if it fails
     or is more than about 3x slower, G1 re-generates in the original batches and a batch noise
     floor is reported next to the flip rates. The G1 threshold stays 196 of 200.
+19. **Round 2 after the failed G5 and G3 (decided by the project lead; decisions log).**
+    Rendering C is now IndianDialect (the pre-set G5 action; it replaces
+    ColloquialSingaporeDialect). For both dialects the features in `render.disabled_features`
+    are removed from Multi-VALUE (criteria A, B refined and C; record in
+    `P0_results/pilot/feature_decision.md`); the run stops if a listed feature does not exist,
+    and rules a remaining feature writes under a switched-off name are dropped. Text inside
+    quotation marks is copied unchanged (`render.protect_quotes`). A rendering with more than
+    1.3 x the SAE text's words is excluded and counted as `too_long`
+    (`render.max_length_ratio`). G3 and G5 use 50 fresh audit pairs per dialect
+    (`sample.audit_round: 2`, sheet `p0_audit2`): a new default_rng(86) permutation of the 200
+    paragraphs not audited in round 1, skipping paragraphs whose rendering is not usable; same
+    frozen guide and thresholds. The round-1 results stay in the report (archived run folder
+    `runs/P0_round1`). The report adds rule-log markers per passage and the features that
+    fired, each compressor's Delta_s minus the random control's (95% intervals, descriptive),
+    and a flag for any dialect whose random control is not within 0.03 of zero.

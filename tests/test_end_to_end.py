@@ -94,6 +94,25 @@ def test_pilot_dry_run():
         assert len(C.read_jsonl(run.p("render", "jobs.jsonl"))) == 1800
         P.step_audit_export(run, "p0_audit")
         assert len(list(run.p("audit", "export", "p0_audit", "pairs").glob("*.html"))) == 100
+        # round 2: 50 fresh paragraphs per dialect, none audited in round 1, usable renderings only
+        P.step_audit_export(run, "p0_audit2")
+        a2 = json.loads(run.p("audit", "round2_pairs.json").read_text())
+        r1 = {a["ppos"] for a in run.items()["audit_pairs"]}
+        pp = [a["ppos"] for a in a2["pairs"]]
+        assert len(pp) == len(set(pp)) == 100 and not (set(pp) & r1)
+        assert [a["dialect"] for a in a2["pairs"]] == ["A"] * 50 + ["C"] * 50
+        assert all(a["qpos"] // 2 == a["ppos"] for a in a2["pairs"])
+        assert a2 == P.audit_round2_pairs(run.items(), run.rendered(), 50)   # deterministic
+        html = sorted(x.name for x in run.p("audit", "export", "p0_audit2", "pairs").glob("*.html"))
+        assert len(html) == 100 and html[0] == "Q001.html"
+        shown = "".join(run.p("audit", "export", "p0_audit2", "pairs", h).read_text() for h in html)
+        assert "IndE" in shown and "CollSgE" not in shown
+        rend = run.rendered()
+        k = f"passage:{pp[0]}:A"
+        rend[k] = {**rend[k], "ok": False, "method": "too_long"}
+        b2 = P.audit_round2_pairs(run.items(), rend, 50)
+        assert pp[0] not in [a["ppos"] for a in b2["pairs"] if a["dialect"] == "A"]
+        assert b2["skipped"][0] == {"ppos": pp[0], "dialect": "A", "method": "too_long"}
         prompts = downstream(run)
         assert len(prompts) == 600 * 21
         sig = json.loads(run.p("results", "signals.json").read_text())
@@ -104,7 +123,15 @@ def test_pilot_dry_run():
         assert {"G1", "G2", "G3", "G4", "G5"} <= set(gts) and gts["G4"]["units"] == 600
         rep = run.p("report", "P0_report.md").read_text()
         assert "Recommended outcome" in rep and "partial words counted as kept" in rep
-        assert "no-coreference sentences, failures" in rep
+        assert "no-coreference sentences, too long, failures" in rep
+        assert "Compressor minus random control" in rep and "Random control in A" in rep
+        assert "Dialect markers per pilot passage" in rep
+        ca = json.loads(run.p("results", "control_adjusted.json").read_text())
+        assert set(ca) == {f"{c}_{d_}" for c in ("L1", "L2", "SC") for d_ in ("A", "C")}
+        assert all(v["n_paragraphs"] == 300 and v["ci95"][0] <= v["estimate"] <= v["ci95"][1] for v in ca.values())
+        assert set(gts["G4"]["flag_by_dialect"]) == {"A", "C"}
+        mk = json.loads(run.p("render", "markers.json").read_text())
+        assert mk["C"]["dialect_class"] == "IndianDialect" and mk["A"]["disabled_fired"] == []
         assert "Achieved keep rate by compressor and text length" in rep
         assert "without no-coreference passages" in rep and "without sentence-fallback and no-coreference passages" in rep
         summ = json.loads(run.p("render", "summary.json").read_text())

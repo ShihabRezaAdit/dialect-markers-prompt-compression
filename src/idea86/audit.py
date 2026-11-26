@@ -25,7 +25,13 @@ COLUMNS = ["pair_id", "dialect", "CONTENT_PRESERVED", "ANSWER_PRESERVED", "FLUEN
 ALLOWED = {"CONTENT_PRESERVED": ["YES", "NO"], "ANSWER_PRESERVED": ["YES", "NO"],
            "FLUENCY": ["NONE", "MINOR", "SEVERE"]}
 DIALECT_NAME = {"A": "AAVE", "C": "CollSgE", "I": "IndE"}
-PREFIX = {"p0_audit": "P", "e1_audit": "E", "e1_relabel": "R", "warmup_audit": "W"}
+CLASS_NAME = {"AfricanAmericanVernacular": "AAVE", "ColloquialSingaporeDialect": "CollSgE", "IndianDialect": "IndE"}
+
+
+def dialect_names(cfg) -> dict:
+    """Display name per rendering code from the configured Multi-VALUE classes (C is IndE in round 2)."""
+    return {code: CLASS_NAME.get(cls, cls) for code, cls in cfg["render"]["dialects"].items()}
+PREFIX = {"p0_audit": "P", "p0_audit2": "Q", "e1_audit": "E", "e1_relabel": "R", "warmup_audit": "W"}
 
 CSS = """
 body{font-family:Georgia,serif;margin:24px;max-width:1300px}
@@ -134,7 +140,8 @@ def write_sheet(path: Path, rows: list[dict]) -> None:
     wb.save(path)
 
 
-def export(sheet: str, pairs: list[dict], outdir: Path, keysdir: Path, order_seed: int = 86) -> list[dict]:
+def export(sheet: str, pairs: list[dict], outdir: Path, keysdir: Path, order_seed: int = 86,
+           names: dict | None = None) -> list[dict]:
     """pairs: dicts with item_key, dialect, sae, dia, question, golds. Rows are put in a
     random order (default_rng(order_seed)) and given neutral IDs."""
     rng = np.random.default_rng(order_seed)
@@ -144,10 +151,11 @@ def export(sheet: str, pairs: list[dict], outdir: Path, keysdir: Path, order_see
     for n, i in enumerate(order, start=1):
         p = pairs[int(i)]
         pid = f"{pre}{n:03d}"
-        rows.append({"pair_id": pid, "dialect": p["dialect"]})
+        name = (names or DIALECT_NAME).get(p["dialect"], p["dialect"])   # shown to the annotator
+        rows.append({"pair_id": pid, "dialect": name})
         (outdir / "pairs").mkdir(parents=True, exist_ok=True)
         (outdir / "pairs" / f"{pid}.html").write_text(
-            pair_html(pid, p["dialect"], p["sae"], p["dia"], p["question"], p["golds"]), encoding="utf-8")
+            pair_html(pid, name, p["sae"], p["dia"], p["question"], p["golds"]), encoding="utf-8")
         keys[pid] = {"item_key": p["item_key"], "dialect": p["dialect"],
                      "auto_answer_preserved": bool(answer_survives(p["golds"], p["dia"]))}
     write_sheet(outdir / f"{sheet}.xlsx", rows)
