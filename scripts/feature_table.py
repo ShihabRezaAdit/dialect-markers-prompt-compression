@@ -8,6 +8,9 @@ meaning-preserving Multi-VALUE feature subset, and post-hoc S1 sensitivity analy
             and IndianDialect with their probabilities (env-render; loads value-nlp)
   remaining per dialect, rule-log entries per pilot passage that remain when the --exclude rule
             types are left out of the current renderings (an estimate before re-rendering) (env-stats)
+  signcheck sign of Delta_s on the data (AAVE): counts of replace ops where the marker is kept and
+            the SAE words dropped or the reverse, per compressor, and one example each for L2 and SC
+            (env-stats)
   s1post    post-hoc S1 on the current data: (a) only the audited pairs labelled
             CONTENT_PRESERVED = YES; (b) all pilot paragraphs, with replace ops typed by the
             rule types given in --exclude left out (env-stats). Exploratory; not a gate input.
@@ -165,13 +168,98 @@ def s1post(exclude: list[str]) -> str:
     return "\n".join(out)
 
 
+def signcheck() -> str:
+    """Sign of Delta_s on the data: for AAVE, per compressor, replace ops where the dialect span
+    is kept and the SAE span dropped (+1) or the reverse (-1), the mean of the per-op difference
+    s_D - s_S, and the mean paragraph Delta_s from metrics.delta_s_text (the function S1 uses).
+    Then one concrete op each: L2 dropping a marker while keeping the SAE words, and SC keeping a
+    marker while dropping the SAE words, with the surrounding words ([-x-] = deleted by the
+    compressor)."""
+    import numpy as np
+    from idea86 import survival as sv
+    from idea86.metrics import delta_s_text
+
+    items = json.load(open(RUN / "items.json"))
+    rend = json.load(open(RUN / "render" / "rendered.json"))
+    comp = {}
+    for c in ("L1", "L2", "SC", "R"):
+        for r in jl(RUN / "compress" / f"{c}.jsonl"):
+            comp[r["job_id"]] = r
+
+    def unit(ppos, c):
+        rr = rend.get(f"passage:{ppos}:A")
+        cs, cd = comp.get(f"A:{ppos}:S:{c}"), comp.get(f"A:{ppos}:A:{c}")
+        if not rr or not rr.get("ok") or not cs or not cd or cs.get("compressed") is None or cd.get("compressed") is None:
+            return None
+        sae = items["passages"][ppos]["context"]
+        st, dt = sv.tokens(sae), sv.tokens(rr["text"])
+        ops = sv.diff_ops(st, dt)
+        ks = sv.survived(sv.word_survival(st, sv.tokens(cs["compressed"])))
+        kd = sv.survived(sv.word_survival(dt, sv.tokens(cd["compressed"])))
+        return sae, rr["text"], cs["compressed"], cd["compressed"], st, dt, ops, ks, kd
+
+    def window(toks, keep, a, b, w=6):
+        lo, hi = max(0, a - w), min(len(toks), b + w)
+        out = []
+        for i in range(lo, hi):
+            t = toks[i].text if keep[i] else f"[-{toks[i].text}-]"
+            out.append(f"**{t}**" if a <= i < b else t)
+        return ("... " if lo else "") + " ".join(out) + (" ..." if hi < len(toks) else "")
+
+    out = ["# Follow-up: sign of Delta_s on the P0 round-2 data (AAVE)", "",
+           "Delta_s per replace op = s_D - s_S (share of dialect-span words kept minus share of SAE-span words kept);",
+           "the paragraph Delta_s is the mean over its replace ops (metrics.delta_s_text, as in S1).", "",
+           "| Compressor | Ops: marker kept, SAE dropped (+1) | Ops: marker dropped, SAE kept (-1) | Mean op difference | Mean paragraph Delta_s | Paragraphs |",
+           "|---|---|---|---|---|---|"]
+    examples = {}
+    for c in ("L1", "L2", "SC", "R"):
+        up = down = 0
+        diffs, para = [], []
+        for pz in items["passages"]:
+            u = unit(pz["pos"], c)
+            if u is None:
+                continue
+            sae, dia, cs, cd, st, dt, ops, ks, kd = u
+            v = delta_s_text(sae, dia, cs, cd)
+            if v is not None:
+                para.append(v)
+            for o in ops:
+                if o.tag != "replace":
+                    continue
+                d = kd[o.j1:o.j2].mean() - ks[o.i1:o.i2].mean()
+                diffs.append(d)
+                if d == 1:
+                    up += 1
+                    if c == "SC" and "SC" not in examples:
+                        examples["SC"] = (pz["pos"], o, st, dt, ks, kd)
+                elif d == -1:
+                    down += 1
+                    if c == "L2" and "L2" not in examples:
+                        examples["L2"] = (pz["pos"], o, st, dt, ks, kd)
+        out.append(f"| {c} | {up} | {down} | {np.mean(diffs):+.4f} | {np.mean(para):+.4f} | {len(para)} |")
+    out += ["", "Expected from the report: L1 +0.118, L2 -0.093, SC +0.208 (mean paragraph Delta_s, AAVE).", ""]
+    for c, title in (("L2", "L2 drops a dialect marker and keeps the SAE word it replaces (op difference -1)"),
+                     ("SC", "SC keeps a dialect marker and drops the SAE word it replaces (op difference +1)")):
+        if c not in examples:
+            out += [f"## {title}", "", "No such op found.", ""]
+            continue
+        ppos, o, st, dt, ks, kd = examples[c]
+        out += [f"## {title}", "",
+                f"Paragraph {ppos}. SAE span: \"{' '.join(t.text for t in st[o.i1:o.i2])}\" -> dialect span: "
+                f"\"{' '.join(t.text for t in dt[o.j1:o.j2])}\". SAE span kept: {ks[o.i1:o.i2].mean():.0%}; "
+                f"dialect span kept: {kd[o.j1:o.j2].mean():.0%}; op difference {kd[o.j1:o.j2].mean() - ks[o.i1:o.i2].mean():+.0f}.", "",
+                f"- SAE after {c}: {window(st, ks, o.i1, o.i2)}",
+                f"- AAVE after {c}: {window(dt, kd, o.j1, o.j2)}", ""]
+    return "\n".join(out)
+
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("command", choices=["table", "features", "remaining", "s1post"])
+    ap.add_argument("command", choices=["table", "features", "remaining", "s1post", "signcheck"])
     ap.add_argument("--exclude", default="")
     a = ap.parse_args()
     exc = [x for x in a.exclude.split(",") if x]
-    text = {"table": table, "features": features, "remaining": lambda: remaining(exc)}.get(a.command, lambda: s1post(exc))()
+    text = {"table": table, "features": features, "remaining": lambda: remaining(exc), "signcheck": signcheck}.get(a.command, lambda: s1post(exc))()
     path = RUN / "audit" / f"followup_{a.command}.md"
     path.write_text(text, encoding="utf-8")
     print(text)
