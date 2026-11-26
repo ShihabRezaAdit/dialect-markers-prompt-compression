@@ -345,13 +345,16 @@ def _question_fn(dialect, text, k):
 
 def render_job(dialect, job: dict, rcfg: dict | None = None) -> dict:
     """One job: questions are rendered whole, passages with render_passage; then quotation
-    protection (render.protect_quotes) and the length check (render.max_length_ratio)."""
+    protection (render.protect_quotes). The length check (render.max_length_ratio) applies to
+    passages only, as decided; questions are not length-checked (decisions log: bug fix)."""
     rcfg = rcfg or {}
     fn = _question_fn if job["kind"] == "question" else render_passage
     if rcfg.get("protect_quotes"):
         res = render_protected(dialect, job["text"], job["k"], fn)
     else:
         res = fn(dialect, job["text"], job["k"])
+    if job["kind"] == "question":
+        return res
     return length_check(res, job["text"], rcfg.get("max_length_ratio"))
 
 

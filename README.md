@@ -157,8 +157,8 @@ Decided during pilot preparation (smoke run; decisions log, internal plan):
     `P0_results/pilot/feature_decision.md`); the run stops if a listed feature does not exist,
     and rules a remaining feature writes under a switched-off name are dropped. Text inside
     quotation marks is copied unchanged (`render.protect_quotes`). A rendering with more than
-    1.3 x the SAE text's words is excluded and counted as `too_long`
-    (`render.max_length_ratio`). G3 and G5 use 50 fresh audit pairs per dialect
+    1.3 x the SAE passage's words is excluded and counted as `too_long`
+    (`render.max_length_ratio`; passages only, questions are not length-checked). G3 and G5 use 50 fresh audit pairs per dialect
     (`sample.audit_round: 2`, sheet `p0_audit2`): a new default_rng(86) permutation of the 200
     paragraphs not audited in round 1, skipping paragraphs whose rendering is not usable; same
     frozen guide and thresholds. The round-1 results stay in the report (archived run folder

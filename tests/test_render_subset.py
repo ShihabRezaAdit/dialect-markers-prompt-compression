@@ -105,8 +105,11 @@ def test_render_job_question_and_passage():
             self.executed_rules, self.modification_counter = {}, {}
             return t + " " + t                                           # doubles the text
 
-    q = render_job(D(), {"kind": "question", "text": "Who is it?", "k": 1},
-                   {"protect_quotes": True, "max_length_ratio": 1.3})
-    assert not q["ok"] and q["method"] == "too_long"
-    q = render_job(D(), {"kind": "question", "text": "Who is it?", "k": 1}, {})
-    assert q["ok"] and q["method"] == "whole"
+    rc = {"protect_quotes": True, "max_length_ratio": 1.3}
+    # questions are not length-checked (the check applies to passages only)
+    q = render_job(D(), {"kind": "question", "text": "Who is it?", "k": 1}, rc)
+    assert q["ok"] and q["method"] == "whole" and "length_ratio" not in q
+    p = render_job(D(), {"kind": "passage", "text": "It is long. It is wide.", "k": 1}, rc)
+    assert not p["ok"] and p["method"] == "too_long"
+    p = render_job(D(), {"kind": "passage", "text": "It is long. It is wide.", "k": 1}, {})
+    assert p["ok"] and p["method"] == "whole"
