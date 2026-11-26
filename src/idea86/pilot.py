@@ -537,7 +537,14 @@ def measure(run: Run) -> dict:
             dia = passage_text(items, rendered, q["ppos"], d)
             flags[q["pos"]] = bool(dia is not None and answer_survives(q["answers"], dia))
         pres[d] = flags
+    # Share of all pilot questions (a question whose dialect passage is not usable, i.e. failed,
+    # too long or left out by a sensitivity analysis, counts as not preserved; G5 uses this), and
+    # the share among questions whose dialect passage is usable (descriptive).
     res["answer_preserved_share"] = {d: float(np.mean(list(pres[d].values()))) for d in DIALECTS}
+    usable = {d: [q["pos"] for q in items["questions"] if passage_text(items, rendered, q["ppos"], d) is not None]
+              for d in DIALECTS}
+    res["answer_preserved_usable"] = {d: {"share": float(np.mean([pres[d][q] for q in usable[d]])) if usable[d] else None,
+                                          "n_usable": len(usable[d]), "n_all": len(pres[d])} for d in DIALECTS}
     res["primary_set"] = sorted(q for q in pres["A"] if pres["A"][q] and pres["C"][q])
     res["rendering"] = rendering_summary(read_json(run.p("render", "rendered.json")))
     return res
@@ -899,7 +906,15 @@ def write_report(run: Run, res, sig, gts, acc, proj, nf=None) -> None:
         L += ["", "| S2 dialect | Delta_a | 97.5% interval | n | Met |", "|---|---|---|---|---|"]
         for k, v in sa["sig"]["S2"].items():
             L.append(f"| {k} | {v['estimate']:.4f} | [{v['ci'][0]:.4f}, {v['ci'][1]:.4f}] | {v['n_questions']} | {v['met']} |")
-        L += ["", f"Answer-preserved share: {json.dumps(sa['res']['answer_preserved_share'])}", ""]
+        L += [""]
+        for d in DIALECTS:
+            u = sa["res"]["answer_preserved_usable"][d]
+            L.append(f"- Answer preserved in {d}: {sa['res']['answer_preserved_share'][d]:.3f} of all {u['n_all']} "
+                     f"pilot questions, counting the {u['n_all'] - u['n_usable']} questions whose passage this analysis "
+                     f"leaves out as not preserved; {u['share']:.3f} among the {u['n_usable']} questions it keeps. "
+                     f"The main analysis and G5 use all questions with only failed passages left out "
+                     f"({res['answer_preserved_share'][d]:.3f}).")
+        L.append("")
         for k, v in sa["acc"].items():
             if isinstance(v, dict):
                 L.append(f"- {k}: {v['estimate']:.4f} [{v['ci95'][0]:.4f}, {v['ci95'][1]:.4f}] (n {v['n']})")

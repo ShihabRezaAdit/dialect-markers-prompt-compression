@@ -126,6 +126,9 @@ def test_pilot_dry_run():
         assert "no-coreference sentences, too long, failures" in rep
         assert "Compressor minus random control" in rep and "Random control in A" in rep
         assert "Dialect markers per pilot passage" in rep
+        assert "questions whose passage this analysis leaves out as not preserved" in rep
+        mu = json.loads(run.p("results", "measure.json").read_text())["answer_preserved_usable"]
+        assert mu["A"]["n_all"] == 600 and mu["A"]["n_usable"] == 600
         ca = json.loads(run.p("results", "control_adjusted.json").read_text())
         assert set(ca) == {f"{c}_{d_}" for c in ("L1", "L2", "SC") for d_ in ("A", "C")}
         assert all(v["n_paragraphs"] == 300 and v["ci95"][0] <= v["estimate"] <= v["ci95"][1] for v in ca.values())
