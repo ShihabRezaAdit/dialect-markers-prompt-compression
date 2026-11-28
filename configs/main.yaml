@@ -14,8 +14,8 @@ isolation:                  # the main study may not read any file in these loca
   forbidden: [pilot, runs/pilot_archive, runs/P0, runs/P0_smoke, runs/P0_round1, P0_annotation, P0_results]
 
 plan_sources:               # SHA-256 of the binding plan sources and the frozen annotation guide
-  internal_plan_tex: ec0b6beae166f82f4ba754098a222ca0b81c2ab8d7c08ce44757629a0e2f7ebc
-  professor_proposal_tex: 4d6af222edf3a0be7a4397242391612aa2f58725fd6dfd52f272eef0c1d02c00
+  internal_plan_tex: aeb66381b7c93009663f629b7481c6caaf51d4309414739c914710c0799dbf31
+  professor_proposal_tex: 52bfe02e288321c9dbe26f26260f31edf9cca459a87aeee21236663405f23e84
   annotation_guide_pdf: db6115222a1976e8b3fb78726e1a2c1f016bb79dded43c5ab8d2f97626d486a0
 
 data:
@@ -107,5 +107,5 @@ hypotheses:                         # confirmatory families, AAVE only (decision
 
 priorities:
   must: [E1 AAVE rendering and 150-pair audit, E2 SQuAD AAVE and REAL-AAE retention at three rates, E5a mechanism]
-  should: [E3 accuracy and flips with four models (with E5b), CoQA retention, E4 realistic arm, E6 ReDial]
-  nice: [X4 marker-protection mitigation, X1 Indian English at full scale]
+  should: [E3 accuracy and flips with four models (with E5b) and CoQA retention, E4 realistic arm (right after E3), X4 marker-protection mitigation on retention and accuracy (exploratory; method frozen in the generation pre-commitment), E6 ReDial]
+  nice: [X1 Indian English at full scale]

@@ -82,11 +82,19 @@ def write(cfg: Config, force: bool = False) -> dict:
     state = _state(cfg)
     meta = {"written_utc": now(), "git_commit": git_commit(), "unit_tests": _unit_tests_ok(cfg)}
     body = [
-        "# Main-study pre-commitment (Idea 86)",
+        "# Main-study pre-commitment 1 of 2: must-have experiments (Idea 86)",
         "",
         f"Written {meta['written_utc']} at git commit `{meta['git_commit']}`, before any main-study text was "
         "rendered, compressed or scored. The configuration, prompts, item lists, hypotheses, families and the "
         "pipeline below are frozen; any change is logged with its reason in the decisions log and reported.",
+        "",
+        "This is the first of two main-study pre-commitments (decisions log: Gate 1 change). It records the "
+        "SHA-256 of the internal execution plan's source (plan_sources_sha256 below), so the E3 hypotheses, "
+        "the H3 rule, the four answer models and their pinned revisions, the prompt templates and every "
+        "threshold are frozen by the plan text from this commit on. The second, generation pre-commitment "
+        "freezes the E3 code and the result of the Mistral-7B-Instruct-v0.3 and Gemma-2-9B-it setup check; it "
+        "is committed before any E3 answer is generated, and no accuracy or flip analysis of main-study data "
+        "takes place before it.",
         "",
         "Confirmatory dialect: AAVE. Families: F1 (three Delta_s tests, Holm) on SQuAD at keep rate 0.5, with "
         "REAL-AAE as the replication family; F2 to F4 are confirmatory only if their experiment is run. H3 is "
